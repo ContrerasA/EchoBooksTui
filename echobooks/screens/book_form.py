@@ -150,6 +150,7 @@ class BookFormScreen(LabelledFields, Screen[bool]):
                 update_book(session, book, draft)
                 if book.status != status:
                     set_status(session, book, status)
+                self.app.pending_focus_book_id = book.id  # type: ignore[attr-defined]
             else:
                 started = parse_date(self.query_one("#f-started", Input).value)
                 finished = parse_date(self.query_one("#f-finished", Input).value)

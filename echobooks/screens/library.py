@@ -88,6 +88,10 @@ class LibraryScreen(LabelledFields, Screen[None]):
         status = None if status_val == "ALL" else Status(str(status_val))
 
         table = self.query_one("#books", DataTable)
+        # Remember the book under the cursor so we can land back on it after the
+        # rebuild — keeps your place when returning from any sub-screen or when
+        # re-sorting/filtering. A freshly added/edited book takes priority.
+        prev_id = self._current_book_id()
         table.clear()
         self._rows = []
         with session_scope() as session:
@@ -111,7 +115,7 @@ class LibraryScreen(LabelledFields, Screen[None]):
                 self._rows.append((book.id, cells))
                 table.add_row(*cells, key=book.id)
         self.sub_title = f"{count} book{'s' if count != 1 else ''}"
-        self._focus_pending_book(table)
+        self._restore_focus(table, prev_id)
         self._flex_widths = None  # row set changed — force a re-fit
         self._fit_columns()
 
@@ -158,16 +162,21 @@ class LibraryScreen(LabelledFields, Screen[None]):
                     row_id, col_key, _truncate(cells[c], width), update_width=(i == last)
                 )
 
-    def _focus_pending_book(self, table: DataTable) -> None:
-        """If an add flow just created a book, select and scroll to its row."""
-        book_id = self.app.pending_focus_book_id  # type: ignore[attr-defined]
-        if book_id is None:
-            return
+    def _restore_focus(self, table: DataTable, prev_id: str | None) -> None:
+        """Select and scroll to the book we should land on after a rebuild.
+
+        A just added/edited book (``pending_focus_book_id``) wins; otherwise we
+        return to whatever row the cursor was on before, so returning from any
+        sub-screen — including Cancel — keeps your place.
+        """
+        target = self.app.pending_focus_book_id or prev_id  # type: ignore[attr-defined]
         self.app.pending_focus_book_id = None  # type: ignore[attr-defined]
+        if target is None:
+            return
         try:
-            row_index = table.get_row_index(book_id)
+            row_index = table.get_row_index(target)
         except Exception:
-            return  # filtered out by the active search/status — nothing to focus
+            return  # not in the current list (filtered out / deleted) — leave at top
         table.move_cursor(row=row_index, scroll=True)
 
     # -- events ----------------------------------------------------------- #
@@ -217,10 +226,10 @@ class LibraryScreen(LabelledFields, Screen[None]):
                 return
             draft = book_to_draft(book)
             status = book.status
-        self.app.push_screen(
-            BookFormScreen(draft, book_id=book_id, status=status),
-            lambda _saved: self.reload(),
-        )
+        # No reload callback: on_screen_resume already reloads when we return,
+        # and a second reload would clear the cursor we just restored to the
+        # edited book (see _focus_pending_book).
+        self.app.push_screen(BookFormScreen(draft, book_id=book_id, status=status))
 
     def action_delete(self) -> None:
         from echobooks.screens.confirm import ConfirmScreen
