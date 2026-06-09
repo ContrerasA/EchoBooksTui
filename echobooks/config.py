@@ -54,13 +54,33 @@ class Settings:
     last_media: str = "AUDIOBOOK"
     last_status: str = "WANT"
 
-    # Account/sync — reserved for a later phase, shown disabled in the UI.
+    # Account/sync.
     mode: str = "offline"  # "offline" | "account"
     server_url: str = ""
     username: str = ""
 
+    # Auth tokens issued by the EchoBooks server after Google sign-in. Persisted
+    # to settings.json — fine for a local CLI; a later hardening pass can move
+    # these to the OS keyring.
+    access_token: str = ""
+    refresh_token: str = ""
+    user_email: str = ""
+    last_sync: str = ""  # ISO timestamp of the last successful pull
+
     # Non-persisted convenience fields.
     extras: dict = field(default_factory=dict)
+
+    def is_logged_in(self) -> bool:
+        return bool(self.access_token and self.server_url)
+
+    def clear_account(self) -> None:
+        """Sign out: drop tokens but keep the local catalog (offline resumes)."""
+        self.access_token = ""
+        self.refresh_token = ""
+        self.user_email = ""
+        self.last_sync = ""
+        self.mode = "offline"
+        self.save()
 
     @classmethod
     def path(cls) -> Path:

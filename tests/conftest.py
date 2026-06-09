@@ -1,4 +1,4 @@
-"""Shared fixtures: an isolated in-memory database per test."""
+"""Shared fixtures: an isolated in-memory database per test (client + server)."""
 
 from __future__ import annotations
 
@@ -24,3 +24,43 @@ def session() -> Iterator[Session]:
         s.close()
         dbsession._engine = None
         dbsession._Session = None
+
+
+# --------------------------------------------------------------------------- #
+# Server fixtures (require the `server` extra; skipped cleanly if it's absent)
+# --------------------------------------------------------------------------- #
+@pytest.fixture
+def server_client(monkeypatch, tmp_path) -> Iterator[object]:
+    """A FastAPI TestClient backed by a fresh in-memory SQLite 'Postgres'.
+
+    Configures Google/JWT env, points the server DB at SQLite (the ORM is
+    dialect-agnostic for our needs), and resets the server's cached settings +
+    engine so each test is isolated.
+    """
+    pytest.importorskip("fastapi")
+    from tests.server_helpers import CLIENT_ID
+
+    monkeypatch.setenv("GOOGLE_CLIENT_ID", CLIENT_ID)
+    monkeypatch.setenv("GOOGLE_CLIENT_SECRET", "test-secret")
+    monkeypatch.setenv("JWT_SECRET", "test-jwt-secret")
+    # A file-backed SQLite DB shared across connections for this test.
+    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{tmp_path}/server.db")
+
+    from fastapi.testclient import TestClient
+
+    from echobooks.server import db as serverdb
+    from echobooks.server.config import get_settings
+
+    get_settings.cache_clear()
+    serverdb._engine = None
+    serverdb._Session = None
+
+    from echobooks.server.app import create_app
+
+    app = create_app()
+    with TestClient(app) as client:
+        yield client
+
+    serverdb._engine = None
+    serverdb._Session = None
+    get_settings.cache_clear()

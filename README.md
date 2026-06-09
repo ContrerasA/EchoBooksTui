@@ -5,8 +5,9 @@ with first-class support for **audiobooks** (Audible / Graphic Audio) alongside 
 ebooks. Add a book and metadata auto-fills from public APIs; then slice your reading history
 into stats: most-read author, hours listened, pages read, finishes per year, genres, and more.
 
-Built with [Textual](https://textual.textualize.io/). Local-first — works fully offline today;
-accounts + auto-sync to a self-hosted server are planned (see **Roadmap**).
+Built with [Textual](https://textual.textualize.io/). Local-first — works fully offline, with
+**optional** Google sign-in that syncs your catalog to your own self-hosted server (see
+**Accounts & sync**). The offline client installs with no server dependencies.
 
 ## Quick start
 
@@ -19,7 +20,7 @@ uv run echobooks # launch the app
 
 Your catalog lives in a local SQLite database under your platform data dir
 (e.g. `~/.local/share/echobooks/echobooks.db`). Nothing leaves your machine except
-metadata lookups to the book APIs.
+metadata lookups to the book APIs — unless you opt into **Accounts & sync** (below).
 
 ## Using it
 
@@ -45,42 +46,97 @@ metadata lookups to the book APIs.
 
 ```
 echobooks/
-  app.py            EchoBooksApp shell + theme + CSS
-  config.py         XDG paths + persisted settings
+  app.py            EchoBooksApp shell + theme + CSS; owns SyncClient, sync-on-launch
+  config.py         XDG paths + persisted settings (incl. account tokens)
   db/
-    models.py       SQLAlchemy models (UUID PKs, soft-delete + dirty flags for future sync)
-    session.py      engine / Session factory / schema creation
+    models.py       SQLAlchemy models (UUID PKs, soft-delete + dirty + user_id for sync)
+    session.py      engine / Session factory / schema creation + user_id migration
     repository.py   all reads, writes, and stats queries (the data API)
-  providers/
-    base.py         BookHit / BookDraft DTOs + Provider protocol
-    openlibrary.py  print/ebook search + enrich
-    audible.py      audiobook catalog keyword search (ASIN + runtime)
-    audnexus.py     audiobook enrich by ASIN
-    registry.py     routes by media type; caches results in the DB
-  screens/          library, add_book, book_form, book_detail, session_edit, stats, settings
+  providers/        openlibrary / audible / audnexus + registry (metadata lookup)
+  sync/             client-side sync (no server deps)
+    serialize.py    wire DTOs + last-write-wins merge (shared with the server)
+    engine.py       push dirty rows → pull → merge; import_local for first login
+    client.py       SyncClient: httpx wrapper for /auth/* + /sync/*
+  server/           OPTIONAL self-hosted API (pip install echobooks[server])
+    app.py          FastAPI factory          auth.py   Google device flow + JWT
+    sync.py         /sync/push + /sync/pull   db.py     Postgres engine / session
+    models.py       User table                config.py env-driven settings
+  screens/          library, add_book, book_form, book_detail, session_edit, stats,
+                    settings, login (device flow), import_picker
   util.py           runtime/date/rating parsing helpers
-tests/              providers (mocked httpx), repository + stats, headless app smoke test
+tests/              providers, repository + stats, sync engine + LWW, server auth + sync,
+                    headless app + login-flow smoke tests, no-server-deps guard
 ```
 
 **Reading sessions** are the source of truth for "read" stats: marking a book *Read* guarantees
 one finished session, and re-reads/re-listens add more — so hours, pages, and finish counts all
 include re-reads and stay internally consistent.
 
+## Accounts & sync
+
+Sign-in is entirely optional — the app works fully offline without it. If you run your own
+EchoBooks server, you can sign in with Google to sync your catalog across machines.
+
+- **Sign in**: Settings (`Ctrl+S`) → enter your server URL → **Sign in with Google**. Because a
+  terminal can't host a browser redirect, login uses the OAuth **device flow**: the app shows a
+  short code and a URL; open it on any device, approve, and the app picks up from there. Your
+  server holds the Google secret — the app only ever sees a token your server issues.
+- **Importing your existing books**: right after your first sign-in, EchoBooks asks which of your
+  local titles to upload to the account — pick exactly the ones you want (Space toggles).
+- **A second machine with its own books**: when you sign in on another computer that already has
+  offline data, you get the same picker for *that* device's titles, so you choose what to push up.
+  Everything then merges by **last-write-wins** (the most recently edited copy of each book wins),
+  and the merged catalog syncs back down.
+- **Sync on launch / on demand**: a signed-in app syncs in the background at startup; **Sync now**
+  in Settings runs it manually. **Sign out** drops your tokens but keeps the local catalog intact.
+
+## Running your own server
+
+The server is optional and ships behind an extra, so the plain client stays dependency-light:
+
+```bash
+pip install echobooks            # offline client only
+pip install "echobooks[server]"  # adds the FastAPI sync server (or: uv sync --all-extras)
+```
+
+**1. Create a Google OAuth client.** In the [Google Cloud Console](https://console.cloud.google.com/)
+→ APIs & Services → Credentials → *Create credentials* → *OAuth client ID*, choose application
+type **TV and Limited Input devices** (this is what enables the device flow). Note the client id
+and secret.
+
+**2. Configure the server** via env (a `.env` file works; it's gitignored):
+
+```bash
+DATABASE_URL=postgresql+psycopg://echobooks@localhost/echobooks
+GOOGLE_CLIENT_ID=...apps.googleusercontent.com
+GOOGLE_CLIENT_SECRET=...
+JWT_SECRET=$(openssl rand -hex 32)   # any long random string
+# optional: HOST, PORT, JWT_ACCESS_TTL, JWT_REFRESH_TTL
+```
+
+**3. Run it:**
+
+```bash
+echobooks-server     # serves the API (creates tables on first run)
+```
+
+Put it behind your Cloudflare tunnel (or any HTTPS reverse proxy) and point the app's **Server
+URL** at that public address. Endpoints: `POST /auth/device/start`, `POST /auth/device/poll`,
+`POST /auth/refresh`, `POST /sync/push`, `GET /sync/pull`, `GET /health`.
+
 ## Development
 
 ```bash
-uv run pytest        # tests (offline; network is mocked)
-uv run ruff check .  # lint
-uv run mypy echobooks
+uv sync --all-extras   # client + server + dev tools
+uv run pytest          # tests (offline; network + Google are mocked)
+uv run ruff check .    # lint
+uv run mypy echobooks  # types
 ```
 
 ## Roadmap
 
-The data model already carries everything sync needs (client-generated UUID keys, `updated_at`,
-soft `deleted_at`, and a `dirty` flag), so these phases bolt on without a rewrite:
-
-- **Phase 2 — Server**: FastAPI + Postgres (reusing the SQLAlchemy models); register/login
-  (argon2 + JWT).
-- **Phase 3 — Sync**: `/sync/push` + `/sync/pull` with last-write-wins; Settings toggles
-  offline ↔ account and syncs on launch.
-- **Phase 4 — Deploy**: `flake.nix` + a NixOS service for the home server.
+- **Phase 2 — Accounts + sync** *(done)*: optional Google device-flow login, server-issued JWTs,
+  FastAPI + Postgres server (reusing the SQLAlchemy models), `/sync/push` + `/sync/pull` with
+  last-write-wins, and an import picker for first-login / multi-device.
+- **Phase 3 — Deploy**: `flake.nix` + a NixOS service for the home server; move client tokens
+  from `settings.json` into the OS keyring.

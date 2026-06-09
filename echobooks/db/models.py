@@ -87,6 +87,12 @@ class SyncMixin:
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=_now, onupdate=_now)
     deleted_at: Mapped[datetime | None] = mapped_column(DateTime, default=None)
     dirty: Mapped[bool] = mapped_column(Boolean, default=True)
+    # Owner of the row on the sync *server*. Always NULL (and ignored) in the
+    # offline client — the client never reads or writes it. The server populates
+    # it and scopes every query by it; there is deliberately no DB-level FK here
+    # so the column stays null-safe on the client's SQLite (which has no `user`
+    # table). See echobooks/server/models.py for the server-side relationship.
+    user_id: Mapped[str | None] = mapped_column(String(32), default=None, index=True)
 
 
 book_tag = Table(

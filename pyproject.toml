@@ -12,8 +12,22 @@ dependencies = [
     "platformdirs>=4.2",
 ]
 
+[project.optional-dependencies]
+# The self-hosted sync server. The offline TUI never needs these — install with
+# `pip install echobooks[server]` only if you run your own EchoBooks server.
+server = [
+    "fastapi>=0.110",
+    "uvicorn[standard]>=0.29",
+    "asyncpg>=0.29",          # async Postgres driver
+    "psycopg[binary]>=3.1",   # sync driver for SQLAlchemy create_all / Alembic
+    "authlib>=1.3",           # Google OAuth / OIDC token verification
+    "pyjwt>=2.8",             # issue / verify our own JWTs
+    "argon2-cffi>=23.1",      # reserved for future password accounts (roadmap)
+]
+
 [project.scripts]
 echobooks = "echobooks.__main__:main"
+echobooks-server = "echobooks.server.cli:main"
 
 [dependency-groups]
 dev = [
@@ -23,6 +37,8 @@ dev = [
     "ruff>=0.6",
     "mypy>=1.11",
     "textual-dev>=1.5",
+    # Server deps in dev too, so the full test suite runs locally via `uv sync`.
+    "echobooks[server]",
 ]
 
 [build-system]
@@ -38,6 +54,11 @@ target-version = "py312"
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "W"]
+
+[tool.ruff.lint.per-file-ignores]
+# FastAPI's dependency-injection idiom puts Depends()/Query() calls in argument
+# defaults; B008 flags that but it's the framework's intended usage.
+"echobooks/server/**" = ["B008"]
 
 [tool.mypy]
 python_version = "3.12"

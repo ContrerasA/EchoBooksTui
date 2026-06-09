@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from textual import work
 from textual.app import App
 from textual.binding import Binding
 from textual.theme import Theme
@@ -10,6 +11,7 @@ from echobooks.config import Settings
 from echobooks.db.session import init_db
 from echobooks.providers.registry import ProviderRegistry
 from echobooks.screens.library import LibraryScreen
+from echobooks.sync.client import SyncClient
 
 ECHOBOOKS_THEME = Theme(
     name="echobooks",
@@ -138,14 +140,44 @@ class EchoBooksApp(App[None]):
         self.ansi_color = True
         self.settings = Settings.load()
         self.registry = ProviderRegistry(self.settings)
+        # Lazily built (only an account user needs it); see sync_client.
+        self._sync_client: SyncClient | None = None
+
+    @property
+    def sync_client(self) -> SyncClient:
+        """The server connection, created on first use and owned by the app."""
+        if self._sync_client is None:
+            self._sync_client = SyncClient(self.settings)
+        return self._sync_client
 
     def on_mount(self) -> None:
         self.register_theme(ECHOBOOKS_THEME)
         self.theme = "echobooks"
         self.push_screen(LibraryScreen())
+        if self.settings.is_logged_in():
+            self._launch_sync()
+
+    @work(exclusive=True, group="sync")
+    async def _launch_sync(self) -> None:
+        """Best-effort sync on startup. Failures stay silent → app works offline."""
+        from echobooks.db.session import get_sessionmaker
+        from echobooks.sync.engine import sync
+
+        try:
+            result = await sync(
+                get_sessionmaker(), self.sync_client, since=self.settings.last_sync or None
+            )
+        except Exception:
+            return  # offline / server down / token expired — just stay local
+        self.settings.last_sync = result.at
+        self.settings.save()
+        if result.applied:
+            self.notify(f"Synced — {result.applied} update(s) from your account")
 
     async def on_unmount(self) -> None:
         await self.registry.aclose()
+        if self._sync_client is not None:
+            await self._sync_client.aclose()
 
 
 def run() -> None:
