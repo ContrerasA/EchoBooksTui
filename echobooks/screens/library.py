@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from textual import on
+from textual import events, on
 from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal
@@ -24,6 +24,14 @@ _SORT_OPTIONS = [
     ("Longest runtime", "runtime"),
     ("Most pages", "pages"),
 ]
+
+_HEADERS = ["Title", "Author", "Series", "Type", "Status", "Rating", "Length"]
+# The free-text columns that flex with the terminal width; the rest (Type,
+# Status, Rating, Length) have bounded content and keep their natural width.
+# Each flex column shrinks no smaller than its minimum before the table starts
+# to scroll horizontally.
+_FLEX_COLS = (0, 1, 2)
+_FLEX_MIN = {0: 12, 1: 10, 2: 10}
 
 
 class LibraryScreen(LabelledFields, Screen[None]):
@@ -51,12 +59,16 @@ class LibraryScreen(LabelledFields, Screen[None]):
                 Select(_SORT_OPTIONS, value="author", allow_blank=False, id="sort"),
                 classes="narrow",
             )
-        yield DataTable(id="books", cursor_type="row", zebra_stripes=False, cell_padding=3)
+        yield DataTable(id="books", cursor_type="row", zebra_stripes=False, cell_padding=1)
         yield Footer()
 
     def on_mount(self) -> None:
         table = self.query_one("#books", DataTable)
-        table.add_columns("Title", "Author", "Series", "Type", "Status", "Rating", "Length")
+        self._col_keys = table.add_columns(*_HEADERS)
+        # Full, untruncated cell text per row, kept so we can re-truncate the
+        # flex columns on resize without re-querying the database.
+        self._rows: list[tuple[str, list[str]]] = []
+        self._flex_widths: list[int] | None = None
         self.reload()
         table.focus()
 
@@ -77,6 +89,7 @@ class LibraryScreen(LabelledFields, Screen[None]):
 
         table = self.query_one("#books", DataTable)
         table.clear()
+        self._rows = []
         with session_scope() as session:
             books = list_books(session, status=status, search=search, sort=str(sort_val))
             count = len(books)
@@ -86,7 +99,7 @@ class LibraryScreen(LabelledFields, Screen[None]):
                     if book.media_type == MediaType.AUDIOBOOK
                     else (f"{book.page_count}p" if book.page_count else "—")
                 )
-                table.add_row(
+                cells = [
                     book.title,
                     book.author_names,
                     _series_label(book),
@@ -94,10 +107,56 @@ class LibraryScreen(LabelledFields, Screen[None]):
                     book.status.label,
                     stars(book.best_rating),
                     length,
-                    key=book.id,
-                )
+                ]
+                self._rows.append((book.id, cells))
+                table.add_row(*cells, key=book.id)
         self.sub_title = f"{count} book{'s' if count != 1 else ''}"
         self._focus_pending_book(table)
+        self._flex_widths = None  # row set changed — force a re-fit
+        self._fit_columns()
+
+    def on_resize(self, event: events.Resize) -> None:
+        # Re-truncate the flex columns once the table has taken its new size.
+        self.call_after_refresh(self._fit_columns)
+
+    def _fit_columns(self) -> None:
+        """Size Title/Author/Series to the available width, truncating to fit.
+
+        Bounded columns (Type/Status/Rating/Length) keep their natural width; the
+        remaining space is split among the flex columns, each clamped to its
+        minimum. Below that the table scrolls horizontally rather than hide data.
+        """
+        if not self.is_mounted or not getattr(self, "_rows", None):
+            return
+        table = self.query_one("#books", DataTable)
+        avail = table.size.width - 2  # leave room for the scrollbar gutter
+        if avail <= 0:
+            return  # not laid out yet; on_resize will call us again
+
+        naturals = [
+            max(len(_HEADERS[c]), *(len(cells[c]) for _, cells in self._rows))
+            for c in range(len(_HEADERS))
+        ]
+        padding = 2 * table.cell_padding * len(_HEADERS)
+        fixed = sum(w for c, w in enumerate(naturals) if c not in _FLEX_COLS)
+        budget = avail - padding - fixed
+
+        flex_nat = [naturals[c] for c in _FLEX_COLS]
+        flex_min = [min(_FLEX_MIN[c], naturals[c]) for c in _FLEX_COLS]
+        widths = _fit_flex_widths(flex_nat, flex_min, budget)
+        if widths == self._flex_widths:
+            return
+        self._flex_widths = widths
+
+        for pos, c in enumerate(_FLEX_COLS):
+            width = widths[pos]
+            col_key = self._col_keys[c]
+            last = len(self._rows) - 1
+            for i, (row_id, cells) in enumerate(self._rows):
+                # Refresh the column's auto-width only once, on the final cell.
+                table.update_cell(
+                    row_id, col_key, _truncate(cells[c], width), update_width=(i == last)
+                )
 
     def _focus_pending_book(self, table: DataTable) -> None:
         """If an add flow just created a book, select and scroll to its row."""
@@ -211,3 +270,33 @@ def _series_label(book) -> str:
     if book.series_position:
         return f"{book.series_name} #{book.series_position}"
     return book.series_name
+
+
+def _truncate(text: str, width: int) -> str:
+    if width <= 0:
+        return ""
+    if len(text) <= width:
+        return text
+    if width == 1:
+        return "…"
+    return text[: width - 1] + "…"
+
+
+def _fit_flex_widths(naturals: list[int], mins: list[int], budget: int) -> list[int]:
+    """Distribute ``budget`` cells across the flex columns.
+
+    Columns get their natural width when everything fits, fall back to their
+    minimums when space is tight, and otherwise shrink proportionally to how
+    much slack (natural − min) each one has.
+    """
+    if budget >= sum(naturals):
+        return list(naturals)
+    if budget <= sum(mins):
+        return list(mins)
+    excess = sum(naturals) - budget
+    slack = [n - m for n, m in zip(naturals, mins)]
+    total = sum(slack) or 1
+    return [
+        max(mins[i], naturals[i] - round(excess * slack[i] / total))
+        for i in range(len(naturals))
+    ]
