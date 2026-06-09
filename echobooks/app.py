@@ -211,6 +211,9 @@ class EchoBooksApp(App[None]):
         # True once a local change has been queued but not yet pushed; lets the
         # on-quit flush know there's something to send (see on_unmount).
         self._sync_pending = False
+        # Set by an add flow to the new book's id; the library consumes it on its
+        # next reload to select and scroll to that row, then clears it.
+        self.pending_focus_book_id: str | None = None
 
     @property
     def sync_client(self) -> SyncClient:

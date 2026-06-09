@@ -97,6 +97,19 @@ class LibraryScreen(LabelledFields, Screen[None]):
                     key=book.id,
                 )
         self.sub_title = f"{count} book{'s' if count != 1 else ''}"
+        self._focus_pending_book(table)
+
+    def _focus_pending_book(self, table: DataTable) -> None:
+        """If an add flow just created a book, select and scroll to its row."""
+        book_id = self.app.pending_focus_book_id  # type: ignore[attr-defined]
+        if book_id is None:
+            return
+        self.app.pending_focus_book_id = None  # type: ignore[attr-defined]
+        try:
+            row_index = table.get_row_index(book_id)
+        except Exception:
+            return  # filtered out by the active search/status — nothing to focus
+        table.move_cursor(row=row_index, scroll=True)
 
     # -- events ----------------------------------------------------------- #
     @on(Input.Changed, "#search")

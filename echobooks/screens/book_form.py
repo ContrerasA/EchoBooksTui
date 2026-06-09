@@ -154,7 +154,7 @@ class BookFormScreen(LabelledFields, Screen[bool]):
                 started = parse_date(self.query_one("#f-started", Input).value)
                 finished = parse_date(self.query_one("#f-finished", Input).value)
                 rating = parse_rating(self.query_one("#f-rating", Input).value)
-                create_book(
+                book = create_book(
                     session,
                     draft,
                     status=status,
@@ -162,6 +162,7 @@ class BookFormScreen(LabelledFields, Screen[bool]):
                     finished_on=finished,
                     rating=rating,
                 )
+                self.app.pending_focus_book_id = book.id  # type: ignore[attr-defined]
         self.app.notify("Saved" if self.is_edit else f"Added “{draft.title}”")
         self.app.schedule_sync()  # type: ignore[attr-defined]
         self.dismiss(True)

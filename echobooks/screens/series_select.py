@@ -69,9 +69,17 @@ class SeriesSelectScreen(Screen[bool]):
             return
         status = Status(str(self.query_one("#status", Select).value))
         self._persist_status(status)
+        created: dict[int, str] = {}
         with session_scope() as session:
             for i in indices:
-                create_book(session, self.drafts[i], status=status)
+                created[i] = create_book(session, self.drafts[i], status=status).id
+        # Select the volume the user originally picked if it was added, else the
+        # first of the batch, so the library lands on a sensible row.
+        focus_id = next(
+            (created[i] for i in indices if self.drafts[i] is self.picked),
+            created[indices[0]],
+        )
+        self.app.pending_focus_book_id = focus_id  # type: ignore[attr-defined]
         self.app.notify(f"Added {len(indices)} books")
         self.app.schedule_sync()  # type: ignore[attr-defined]
         self.dismiss(True)
