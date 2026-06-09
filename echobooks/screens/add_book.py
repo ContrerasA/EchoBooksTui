@@ -12,13 +12,14 @@ from textual.widgets.option_list import Option
 
 from echobooks.db.models import MediaType, Status
 from echobooks.providers.base import BookDraft, BookHit
+from echobooks.screens.fields import LabelledFields, field
 from echobooks.util import format_runtime
 
 _MEDIA_OPTIONS = [(m.label, m.value) for m in MediaType]
 _STATUS_OPTIONS = [(s.label, s.value) for s in Status]
 
 
-class AddBookScreen(Screen[None]):
+class AddBookScreen(LabelledFields, Screen[None]):
     BINDINGS = [
         Binding("escape", "cancel", "Back"),
         Binding("ctrl+m", "manual", "Manual entry"),
@@ -36,14 +37,20 @@ class AddBookScreen(Screen[None]):
             )
             settings = self.app.settings  # type: ignore[attr-defined]
             with Horizontal(classes="toolbar"):
-                yield Select(
-                    _MEDIA_OPTIONS, value=settings.last_media, allow_blank=False, id="media"
+                yield field(
+                    "Media type",
+                    Select(
+                        _MEDIA_OPTIONS, value=settings.last_media, allow_blank=False, id="media"
+                    ),
                 )
-                yield Select(
-                    _STATUS_OPTIONS, value=settings.last_status, allow_blank=False, id="status"
+                yield field(
+                    "Status",
+                    Select(
+                        _STATUS_OPTIONS, value=settings.last_status, allow_blank=False, id="status"
+                    ),
                 )
-            with Horizontal(classes="toolbar"):
-                yield Input(placeholder="Title / author…", id="query")
+            with Horizontal(classes="toolbar toolbar-actions"):
+                yield field("Search", Input(placeholder="Title / author…", id="query"))
                 yield Button("Search", variant="primary", id="search-btn")
                 yield Button("Manual", id="manual-btn")
             yield Static("", id="search-status", classes="hint")

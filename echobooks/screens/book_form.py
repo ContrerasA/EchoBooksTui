@@ -7,28 +7,21 @@ from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.screen import Screen
-from textual.widgets import Button, Input, Label, Select, Static, TextArea
+from textual.widgets import Button, Input, Select, Static, TextArea
 
 from echobooks.db.models import MediaType, Status
 from echobooks.db.repository import create_book, get_book, set_status, update_book
 from echobooks.db.session import session_scope
 from echobooks.providers.base import BookDraft
+from echobooks.screens.fields import LabelledFields
+from echobooks.screens.fields import field as _field
 from echobooks.util import format_runtime, parse_date, parse_rating, parse_runtime, split_csv
 
 _MEDIA_OPTIONS = [(m.label, m.value) for m in MediaType]
 _STATUS_OPTIONS = [(s.label, s.value) for s in Status]
 
 
-def _field(label: str, widget: Input | Select | TextArea) -> Vertical:
-    """A labelled field; its label underlines when the field has focus."""
-    if isinstance(widget, Input):
-        # Don't select-all on focus — that draws an accent box over the value,
-        # which reads as "highlighting the field". The label underline is the cue.
-        widget.select_on_focus = False
-    return Vertical(Label(label), widget, classes="field")
-
-
-class BookFormScreen(Screen[bool]):
+class BookFormScreen(LabelledFields, Screen[bool]):
     BINDINGS = [
         Binding("ctrl+s", "save", "Save"),
         Binding("escape", "cancel", "Cancel"),
@@ -117,19 +110,6 @@ class BookFormScreen(Screen[bool]):
     def on_mount(self) -> None:
         # Focus Save so Enter accepts right away; Tab then reaches the fields.
         self.query_one("#save", Button).focus()
-
-    def on_descendant_focus(self) -> None:
-        self.call_after_refresh(self._highlight_active_field)
-
-    def on_descendant_blur(self) -> None:
-        self.call_after_refresh(self._highlight_active_field)
-
-    def _highlight_active_field(self) -> None:
-        """Underline the label of whichever field currently holds focus."""
-        for field in self.query(".field"):
-            active = "focus-within" in field.pseudo_classes
-            for label in field.query(Label):
-                label.set_class(active, "active-label")
 
     def _collect(self) -> BookDraft:
         def val(wid: str) -> str:

@@ -12,6 +12,7 @@ from textual.widgets import DataTable, Footer, Header, Input, Select
 from echobooks.db.models import MediaType, Status
 from echobooks.db.repository import book_to_draft, get_book, list_books, soft_delete_book
 from echobooks.db.session import session_scope
+from echobooks.screens.fields import LabelledFields, field
 from echobooks.util import format_runtime, stars
 
 _STATUS_OPTIONS = [("All", "ALL"), *[(s.label, s.value) for s in Status]]
@@ -25,7 +26,7 @@ _SORT_OPTIONS = [
 ]
 
 
-class LibraryScreen(Screen[None]):
+class LibraryScreen(LabelledFields, Screen[None]):
     BINDINGS = [
         Binding("a", "add", "Add book"),
         Binding("e", "edit", "Edit"),
@@ -39,9 +40,17 @@ class LibraryScreen(Screen[None]):
     def compose(self) -> ComposeResult:
         yield Header(show_clock=True)
         with Horizontal(classes="toolbar"):
-            yield Input(placeholder="Search title or author…", id="search")
-            yield Select(_STATUS_OPTIONS, value="ALL", allow_blank=False, id="status")
-            yield Select(_SORT_OPTIONS, value="author", allow_blank=False, id="sort")
+            yield field("Search", Input(placeholder="Title or author…", id="search"))
+            yield field(
+                "Status",
+                Select(_STATUS_OPTIONS, value="ALL", allow_blank=False, id="status"),
+                classes="narrow",
+            )
+            yield field(
+                "Sort",
+                Select(_SORT_OPTIONS, value="author", allow_blank=False, id="sort"),
+                classes="narrow",
+            )
         yield DataTable(id="books", cursor_type="row", zebra_stripes=False, cell_padding=3)
         yield Footer()
 

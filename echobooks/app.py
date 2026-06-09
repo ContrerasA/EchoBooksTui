@@ -15,14 +15,18 @@ from echobooks.providers.registry import ProviderRegistry
 from echobooks.screens.library import LibraryScreen
 from echobooks.sync.client import SyncClient
 
+# Catppuccin-leaning pastel palette with the user's coral-red as the lone accent
+# (selected/active highlights). Structure is a muted lavender; the secondary is a
+# warm peach (list headers + focus) chosen to harmonise with the coral rather than
+# contrast it like the old blue/teal did. Dark near-black base kept.
 ECHOBOOKS_THEME = Theme(
     name="echobooks",
-    primary="#F54257",
-    accent="#F54257",
-    secondary="#7AA2F7",
-    success="#9ECE6A",
-    warning="#E0AF68",
-    error="#F7768E",
+    accent="#F54257",  # coral red — selected row, active field, stat numbers
+    primary="#A89CC8",  # muted lavender — panel/dialog borders, primary buttons
+    secondary="#FAB387",  # warm peach (Catppuccin) — list headers, focus & toggles
+    success="#A6E3A1",  # pastel green (Catppuccin)
+    warning="#F9E2AF",  # soft yellow (Catppuccin) — distinct from the peach secondary
+    error="#F38BA8",  # soft pink-red (Catppuccin), kept distinct from the accent
     foreground="#C8CCD4",
     background="#0E0E12",
     surface="#16161D",
@@ -53,25 +57,47 @@ class EchoBooksApp(App[None]):
     Footer { background: transparent; }
     FooterKey { background: transparent; }
 
-    /* Breathing room between the header, the search/filter bar, and the list. */
+    /* Scrollbars: slate track + thumb instead of the default near-black blocks
+       (ansi mode renders them black, which reads as stray boxes). Inherited by
+       all scrollable widgets. */
+    Screen {
+        scrollbar-size-vertical: 1;
+        scrollbar-background: #1C1C26;
+        scrollbar-background-hover: #1C1C26;
+        scrollbar-background-active: #1C1C26;
+        scrollbar-color: #34344A;
+        scrollbar-color-hover: $secondary;
+        scrollbar-color-active: $secondary;
+        scrollbar-corner-color: #1C1C26;
+    }
+
+    /* Breathing room between the header, the search/filter bar, and the list.
+       The search/filter controls themselves are labelled .field widgets (same
+       style as the edit form) — focus is shown by the label colouring, so there
+       is no toolbar-specific control styling here. */
     .toolbar {
         height: auto;
         padding: 0 1;
         margin: 1 1 0 1;
         background: transparent;
     }
-    .toolbar Input { width: 1fr; }
-    .toolbar Select { width: 28; }
+    /* Fixed-width toolbar fields (the status/sort selects) so search takes the
+       rest of the row. */
+    .field.narrow { width: 32; }
+    /* Buttons that sit beside a labelled field (add-book search row): nudge them
+       down a row so they line up with the control, not the label above it. */
+    .toolbar-actions Button { margin: 1 1 0 0; }
 
     #books {
         height: 1fr;
         margin: 1;
         background: transparent;
     }
-    /* Header: bold, no background fill. */
+    /* Header: bold, no background fill. Uses the peach secondary so the list
+       headers stay in step with the rest of the palette. */
     #books > .datatable--header {
         background: transparent;
-        color: $accent;
+        color: $secondary;
         text-style: bold;
     }
     /* Selected row: accent underline instead of a background highlight. */
@@ -105,11 +131,21 @@ class EchoBooksApp(App[None]):
         border: none;
         padding: 0 1;
         margin: 0 0 1 0;
-        background: $boost;
+        background: #2A2A38;
     }
     .field Select { margin: 0 0 1 0; }
-    .field Select SelectCurrent { border: none; height: 1; background: $boost; }
-    #f-description { height: 4; background: $boost; }
+    .field Select SelectCurrent { border: none; height: 1; background: #2A2A38; }
+    #f-description {
+        height: 4;
+        background: #2A2A38;
+        scrollbar-size-vertical: 1;
+        scrollbar-background: #2A2A38;
+        scrollbar-background-hover: #2A2A38;
+        scrollbar-background-active: #2A2A38;
+        scrollbar-color: #34344A;
+        scrollbar-color-hover: $secondary;
+        scrollbar-color-active: $secondary;
+    }
 
     .stat-grid { layout: grid; grid-size: 4; grid-gutter: 1; height: auto; }
     .stat-card {
@@ -132,10 +168,34 @@ class EchoBooksApp(App[None]):
         background: transparent;
     }
 
-    .actions { height: auto; padding: 1; }
-    .actions Button { margin: 0 1 0 0; }
+    /* Buttons: flat height-1 chips with a subtle fill instead of the default
+       3-row outlined block. The variant text colors (green/red/mint/lavender)
+       carry the meaning. !important is needed to beat Textual's :ansi button
+       rules, which set a tall border + transparent background per variant. */
+    Button {
+        height: 1;
+        min-width: 0;
+        padding: 0 2;
+        margin: 0 1 0 0;
+        border: none !important;
+        background: #2A2A38 !important;
+    }
+    /* Buttons sit in an .actions row; give it room on both sides since it can be
+       at the top of a form (Save/Cancel above the fields) or the bottom of a
+       dialog. The bottom margin is the gap before the first form row. */
+    .actions { height: auto; margin: 1 0 1 0; }
 
     SelectionList { height: auto; max-height: 20; background: transparent; }
+
+    /* Search results: collapse to nothing when empty (no opaque "black box"),
+       grow as hits arrive. Default OptionList has a near-black border + surface
+       fill that otherwise reads as a stray box. */
+    #results {
+        height: auto;
+        max-height: 16;
+        border: none;
+        background: transparent;
+    }
 
     #detail-meta { height: 1fr; }
     .hint { color: $text-muted; }
