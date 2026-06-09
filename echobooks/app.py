@@ -271,6 +271,30 @@ class EchoBooksApp(App[None]):
         applied = await self._do_sync()
         if applied:
             self.notify(f"Synced — {applied} update(s) from your account")
+            self._check_duplicates()
+
+    def _check_duplicates(self) -> None:
+        """After pulling remote changes, surface any same-book duplicates.
+
+        Opens the review screen when we're sitting on the library; otherwise just
+        nudges the user, since Ctrl+D there reopens it on demand.
+        """
+        from echobooks.db.repository import find_duplicate_groups
+        from echobooks.db.session import session_scope
+        from echobooks.screens.library import LibraryScreen
+        from echobooks.screens.resolve_duplicates import ResolveDuplicatesScreen
+
+        with session_scope() as session:
+            count = len(find_duplicate_groups(session))
+        if not count:
+            return
+        if isinstance(self.screen, LibraryScreen):
+            self.push_screen(ResolveDuplicatesScreen())
+        else:
+            self.notify(
+                f"{count} possible duplicate{'s' if count != 1 else ''} found — "
+                "press Ctrl+D in the library to review"
+            )
 
     async def on_unmount(self) -> None:
         # Flush a pending change-triggered sync before we tear down, so adding a

@@ -11,7 +11,7 @@ from textual.widgets import Button, Footer, Header, Label, Select, SelectionList
 from textual.widgets.selection_list import Selection
 
 from echobooks.db.models import Status
-from echobooks.db.repository import create_book
+from echobooks.db.repository import create_book, draft_match_key, find_duplicate
 from echobooks.db.session import session_scope
 from echobooks.providers.base import BookDraft
 from echobooks.util import format_runtime
@@ -70,17 +70,27 @@ class SeriesSelectScreen(Screen[bool]):
         status = Status(str(self.query_one("#status", Select).value))
         self._persist_status(status)
         created: dict[int, str] = {}
+        skipped = 0
         with session_scope() as session:
             for i in indices:
-                created[i] = create_book(session, self.drafts[i], status=status).id
-        # Select the volume the user originally picked if it was added, else the
-        # first of the batch, so the library lands on a sensible row.
-        focus_id = next(
-            (created[i] for i in indices if self.drafts[i] is self.picked),
-            created[indices[0]],
-        )
-        self.app.pending_focus_book_id = focus_id  # type: ignore[attr-defined]
-        self.app.notify(f"Added {len(indices)} books")
+                draft = self.drafts[i]
+                # Skip volumes already in the library (also catches dupes within
+                # this same batch, since earlier creates are now live rows).
+                if find_duplicate(session, draft_match_key(draft)) is not None:
+                    skipped += 1
+                    continue
+                created[i] = create_book(session, draft, status=status).id
+        if created:
+            # Land on the volume the user picked if we added it, else the first.
+            focus_id = next(
+                (created[i] for i in indices if i in created and self.drafts[i] is self.picked),
+                created[next(i for i in indices if i in created)],
+            )
+            self.app.pending_focus_book_id = focus_id  # type: ignore[attr-defined]
+        msg = f"Added {len(created)} book{'s' if len(created) != 1 else ''}"
+        if skipped:
+            msg += f" · {skipped} already in library"
+        self.app.notify(msg)
         self.app.schedule_sync()  # type: ignore[attr-defined]
         self.dismiss(True)
 

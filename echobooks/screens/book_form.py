@@ -10,7 +10,14 @@ from textual.screen import Screen
 from textual.widgets import Button, Input, Select, Static, TextArea
 
 from echobooks.db.models import MediaType, Status
-from echobooks.db.repository import create_book, get_book, set_status, update_book
+from echobooks.db.repository import (
+    create_book,
+    draft_match_key,
+    find_duplicate,
+    get_book,
+    set_status,
+    update_book,
+)
 from echobooks.db.session import session_scope
 from echobooks.providers.base import BookDraft
 from echobooks.screens.fields import LabelledFields
@@ -141,6 +148,36 @@ class BookFormScreen(LabelledFields, Screen[bool]):
     def action_save(self) -> None:
         draft = self._collect()
         status = Status(str(self.query_one("#f-status", Select).value))
+        if not self.is_edit:
+            with session_scope() as session:
+                dup = find_duplicate(session, draft_match_key(draft))
+                dup_info = (dup.id, dup.title, dup.status.label) if dup else None
+            if dup_info is not None:
+                self._prompt_duplicate(dup_info, draft, status)
+                return
+        self._commit(draft, status)
+
+    def _prompt_duplicate(
+        self, dup_info: tuple[str, str, str], draft: BookDraft, status: Status
+    ) -> None:
+        from echobooks.screens.duplicate_prompt import DuplicateBookScreen
+
+        dup_id, dup_title, dup_status = dup_info
+
+        def _after(choice: str | None) -> None:
+            if choice == "add":
+                self._commit(draft, status)
+            elif choice == "open":
+                # Land on the existing book: stamp it for focus and unwind the
+                # add flow (dismiss True so AddBookScreen closes too).
+                self.app.pending_focus_book_id = dup_id  # type: ignore[attr-defined]
+                self.app.notify(f"“{dup_title}” is already in your library")
+                self.dismiss(True)
+            # "cancel"/None: stay on the form so they can tweak and retry.
+
+        self.app.push_screen(DuplicateBookScreen(dup_title, dup_status), _after)
+
+    def _commit(self, draft: BookDraft, status: Status) -> None:
         with session_scope() as session:
             if self.is_edit:
                 book = get_book(session, self.book_id)  # type: ignore[arg-type]

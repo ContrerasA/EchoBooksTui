@@ -40,6 +40,7 @@ class LibraryScreen(LabelledFields, Screen[None]):
         Binding("e", "edit", "Edit"),
         Binding("d", "delete", "Delete"),
         Binding("s", "stats", "Stats"),
+        Binding("ctrl+d", "resolve_duplicates", "Duplicates"),
         Binding("ctrl+s", "settings", "Settings"),
         Binding("slash", "focus_search", "Search", show=False),
         Binding("r", "refresh", "Refresh", show=False),
@@ -260,6 +261,11 @@ class LibraryScreen(LabelledFields, Screen[None]):
         from echobooks.screens.stats import StatsScreen
 
         self.app.push_screen(StatsScreen())
+
+    def action_resolve_duplicates(self) -> None:
+        from echobooks.screens.resolve_duplicates import ResolveDuplicatesScreen
+
+        self.app.push_screen(ResolveDuplicatesScreen())
 
     def action_settings(self) -> None:
         from echobooks.screens.settings import SettingsScreen

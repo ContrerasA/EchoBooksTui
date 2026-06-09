@@ -297,6 +297,110 @@ def soft_delete_book(session: Session, book: Book) -> None:
 
 
 # --------------------------------------------------------------------------- #
+# Deduplication / reconciliation
+# --------------------------------------------------------------------------- #
+# Two entries are "the same book" when they share a natural key. A provider id
+# (source + external id, e.g. an Audible ASIN) is authoritative; manual entries
+# fall back to normalized title + primary author. Media type is always part of
+# the key, so the audiobook and the print edition of one title stay distinct.
+MatchKey = tuple[str, ...]
+
+
+def _match_key(
+    *,
+    external_source: str | None,
+    external_id: str | None,
+    title: str,
+    sort_title: str | None,
+    first_author: str,
+    media_type: MediaType,
+) -> MatchKey:
+    src = (external_source or "").strip().lower()
+    ext = (external_id or "").strip().lower()
+    if src and ext and src != "manual":
+        return ("ext", src, ext, media_type.value)
+    norm_title = (sort_title or _sort_key(title or "")).strip().lower()
+    norm_author = " ".join((first_author or "").lower().split())
+    return ("meta", norm_title, norm_author, media_type.value)
+
+
+def book_match_key(book: Book) -> MatchKey:
+    return _match_key(
+        external_source=book.external_source,
+        external_id=book.external_id,
+        title=book.title,
+        sort_title=book.sort_title,
+        first_author=book.authors[0].name if book.authors else "",
+        media_type=book.media_type,
+    )
+
+
+def draft_match_key(draft: BookDraft) -> MatchKey:
+    return _match_key(
+        external_source=draft.external_source,
+        external_id=draft.external_id,
+        title=draft.title,
+        sort_title=None,
+        first_author=draft.authors[0] if draft.authors else "",
+        media_type=draft.media_type,
+    )
+
+
+def _live_books_with_authors(session: Session) -> list[Book]:
+    stmt = (
+        select(Book)
+        .where(Book.deleted_at.is_(None))
+        .options(selectinload(Book.author_links).selectinload(BookAuthor.author))
+    )
+    return list(session.scalars(stmt).unique().all())
+
+
+def find_duplicate(session: Session, key: MatchKey, *, exclude_id: str | None = None) -> Book | None:
+    """Return a live book matching ``key`` (other than ``exclude_id``), if any."""
+    for book in _live_books_with_authors(session):
+        if book.id == exclude_id:
+            continue
+        if book_match_key(book) == key:
+            return book
+    return None
+
+
+def find_duplicate_groups(session: Session) -> list[list[Book]]:
+    """Group live books by natural key; return only the groups with >1 member."""
+    groups: dict[MatchKey, list[Book]] = {}
+    for book in _live_books_with_authors(session):
+        groups.setdefault(book_match_key(book), []).append(book)
+    return [g for g in groups.values() if len(g) > 1]
+
+
+def merge_books(session: Session, survivor_id: str, loser_ids: list[str]) -> None:
+    """Fold ``loser_ids`` into ``survivor_id``: move reading history over, carry
+    favorite/non-WANT status, then soft-delete the losers so the merge syncs.
+
+    The caller picks a deterministic survivor (e.g. ``min(id)``) so every device
+    converges on the same winner without coordinating.
+    """
+    survivor = session.get(Book, survivor_id)
+    if survivor is None or survivor.deleted_at is not None:
+        return
+    for loser_id in loser_ids:
+        loser = session.get(Book, loser_id)
+        if loser is None or loser.deleted_at is not None or loser.id == survivor.id:
+            continue
+        for rs in list(loser.sessions):
+            rs.book_id = survivor.id  # onupdate bumps updated_at so it wins on sync
+            rs.dirty = True
+        if loser.is_favorite and not survivor.is_favorite:
+            survivor.is_favorite = True
+            survivor.dirty = True
+        if survivor.status == Status.WANT and loser.status != Status.WANT:
+            survivor.status = loser.status
+            survivor.dirty = True
+        soft_delete_book(session, loser)
+    session.flush()
+
+
+# --------------------------------------------------------------------------- #
 # Reading sessions (reads / re-reads)
 # --------------------------------------------------------------------------- #
 def add_session(
