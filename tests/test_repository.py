@@ -58,18 +58,20 @@ def _series_book(title, author, series, pos, released) -> BookDraft:
 
 
 def test_author_sort_order(session: Session):
-    # Within a series, ordering is by release date (chronological), NOT title:
-    # "Zebra" (2001) must come before "Apple" (2005).
-    repo.create_book(session, _series_book("Apple", "Brandon Sanderson", "Saga", "2", "2005"),
+    # Within a series, ordering is by book number (reading order), NOT release
+    # date or title: book #1 "Zebra" must come before book #2 "Apple" even
+    # though "Apple" was published first (a prequel released later, an omnibus
+    # re-release, etc. must not scramble the reading order).
+    repo.create_book(session, _series_book("Apple", "Brandon Sanderson", "Saga", "2", "2001"),
                      status=Status.WANT)
-    repo.create_book(session, _series_book("Zebra", "Brandon Sanderson", "Saga", "1", "2001"),
+    repo.create_book(session, _series_book("Zebra", "Brandon Sanderson", "Saga", "1", "2005"),
                      status=Status.WANT)
     repo.create_book(session, _print("Dune", "Frank Herbert", 412), status=Status.WANT)
     repo.create_book(session, _audiobook("Project Hail Mary", "Andy Weir", 970), status=Status.WANT)
     session.flush()
 
     ordered = [b.title for b in repo.list_books(session, sort="author")]
-    # Andy Weir < Brandon Sanderson (Saga, chronological: Zebra then Apple) < Frank Herbert
+    # Andy Weir < Brandon Sanderson (Saga, by book number: #1 Zebra then #2 Apple) < Frank Herbert
     assert ordered == ["Project Hail Mary", "Zebra", "Apple", "Dune"]
 
 

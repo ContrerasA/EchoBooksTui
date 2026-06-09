@@ -8,6 +8,7 @@ purely from sessions — re-reads count, and the numbers stay internally consist
 
 from __future__ import annotations
 
+import re
 from collections import Counter
 from datetime import date
 from typing import TYPE_CHECKING, NamedTuple
@@ -263,7 +264,7 @@ def list_books(
         )
 
     if sort == "author":
-        # Author asc, then series, then release date (chronological) — done in
+        # Author asc, then series, then book number (reading order) — done in
         # Python so we can key off the primary author across the many-to-many.
         stmt = stmt.order_by(Book.sort_title)
         books = list(session.scalars(stmt).unique().all())
@@ -481,21 +482,35 @@ def genre_breakdown(session: Session, limit: int = 10) -> list[tuple[str, int]]:
 _ARTICLES = ("the ", "a ", "an ")
 
 
-def _author_sort_key(book: Book) -> tuple[str, str, str, str]:
-    """Author, then series, then release date (chronological), then title.
+def _author_sort_key(book: Book) -> tuple[str, str, float, str, str]:
+    """Author, then series, then book number, then release date, then title.
 
-    Books with no author sort last; books with no release date sort last within
-    their series. ``published_date`` is ISO-ish ("2021-05-04") or a year ("1965"),
-    both of which order chronologically as plain strings.
+    Within a series, books order by their position (book #1, #2, #3…) — the
+    reading order. Release date and title only break ties (or order books that
+    carry no position, which sort last within the series). ``published_date`` is
+    ISO-ish ("2021-05-04") or a year ("1965"), both of which order
+    chronologically as plain strings. Books with no author sort last overall.
     """
     if book.authors:
         author = (book.authors[0].sort_name or book.authors[0].name or "").lower()
     else:
         author = "￿"
     series = (book.series_name or "").lower()
+    position = _series_position_key(book.series_position)
     released = book.published_date or "9999"
     title = (book.sort_title or book.title or "").lower()
-    return (author, series, released, title)
+    return (author, series, position, released, title)
+
+
+def _series_position_key(pos: str | None) -> float:
+    """Parse a series position ("1", "2", "1.5", "Book 3") to a sortable number.
+
+    Missing or non-numeric positions sort last within their series.
+    """
+    if not pos:
+        return float("inf")
+    match = re.search(r"\d+(?:\.\d+)?", pos)
+    return float(match.group()) if match else float("inf")
 
 
 def _sort_key(title: str) -> str:
