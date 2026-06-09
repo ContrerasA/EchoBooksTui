@@ -128,6 +128,42 @@ Put it behind your Cloudflare tunnel (or any HTTPS reverse proxy) and point the 
 URL** at that public address. Endpoints: `POST /auth/device/start`, `POST /auth/device/poll`,
 `POST /auth/refresh`, `POST /sync/push`, `GET /sync/pull`, `GET /health`.
 
+### Deploying declaratively on NixOS (flake)
+
+The repo ships a flake that builds the app from `uv.lock` with [uv2nix](https://pyproject-nix.github.io/uv2nix/)
+(no runtime `uv sync`, no `nix-ld` — C-extension deps come from wheels) and a NixOS module
+that runs the server as a hardened systemd service and provisions Postgres.
+
+```nix
+# flake.nix (your host)
+{
+  inputs.echobooks.url = "github:ContrerasA/EchoBooksTui";   # or git+file:// for a local checkout
+  outputs = { self, nixpkgs, echobooks }: {
+    nixosConfigurations.myhost = nixpkgs.lib.nixosSystem {
+      modules = [
+        echobooks.nixosModules.default
+        {
+          services.echobooks = {
+            enable = true;
+            # host/port default to 127.0.0.1:8000 (sit behind your TLS proxy)
+            # secrets live OUTSIDE the Nix store:
+            environmentFile = "/var/lib/echobooks/.env";  # GOOGLE_CLIENT_ID/SECRET, JWT_SECRET
+          };
+        }
+      ];
+    };
+  };
+}
+```
+
+`nixos-rebuild switch` then builds the pinned server, creates the `echobooks` Postgres role +
+database (unix-socket peer auth), and starts `echobooks.service`. Redeploys are a rebuild —
+no `git pull` + `uv sync` on the box. Options: `services.echobooks.{package,user,stateDir,host,
+port,database,databaseUrl,environmentFile,provisionDatabase}` (see `nix/module.nix`).
+
+You can also just build/run the package directly: `nix build github:ContrerasA/EchoBooksTui`
+(produces an env with `echobooks` + `echobooks-server`), or `nix run …#server`.
+
 ## Development
 
 ```bash
@@ -135,6 +171,9 @@ uv sync --all-extras   # client + server + dev tools
 uv run pytest          # tests (offline; network + Google are mocked)
 uv run ruff check .    # lint
 uv run mypy echobooks  # types
+
+# Nix users: a devShell with the full env is available
+nix develop            # or `nix flake check` to validate the flake
 ```
 
 ## Roadmap
@@ -142,5 +181,5 @@ uv run mypy echobooks  # types
 - **Phase 2 — Accounts + sync** *(done)*: optional Google device-flow login, server-issued JWTs,
   FastAPI + Postgres server (reusing the SQLAlchemy models), `/sync/push` + `/sync/pull` with
   last-write-wins, and an import picker for first-login / multi-device.
-- **Phase 3 — Hardening / deploy**: client tokens now live in the OS keyring *(done)*; remaining:
-  `flake.nix` + a NixOS service so the home-server deploy is declarative.
+- **Phase 3 — Hardening / deploy** *(done)*: client tokens moved to the OS keyring; a `flake.nix`
+  (uv2nix build) + NixOS module make the home-server deploy fully declarative.
