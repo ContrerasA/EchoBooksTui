@@ -73,6 +73,7 @@ class SeriesSelectScreen(Screen[bool]):
             for i in indices:
                 create_book(session, self.drafts[i], status=status)
         self.app.notify(f"Added {len(indices)} books")
+        self.app.schedule_sync()  # type: ignore[attr-defined]
         self.dismiss(True)
 
     @on(Button.Pressed, "#single")

@@ -101,6 +101,7 @@ class BookDetailScreen(Screen[None]):
             book = get_book(session, self.book_id)
             if book and book.status != new_status:
                 set_status(session, book, new_status)
+        self.app.schedule_sync()  # type: ignore[attr-defined]
         self.reload()
 
     @on(Button.Pressed, "#edit")
@@ -142,6 +143,7 @@ class BookDetailScreen(Screen[None]):
                 book.dirty = True
                 fav = book.is_favorite
         self.app.notify("★ Favorited" if fav else "Unfavorited")
+        self.app.schedule_sync()  # type: ignore[attr-defined]
         self.reload()
 
     def action_delete(self) -> None:
@@ -161,6 +163,7 @@ class BookDetailScreen(Screen[None]):
                 if book:
                     soft_delete_book(session, book)
             self.app.notify(f"Deleted “{title}”")
+            self.app.schedule_sync()  # type: ignore[attr-defined]
             self.dismiss()
 
         self.app.push_screen(ConfirmScreen(f"Delete “{title}”?"), _after)

@@ -162,6 +162,7 @@ class LibraryScreen(Screen[None]):
                     soft_delete_book(session, book)
             self.reload()
             self.app.notify(f"Deleted “{title}”")
+            self.app.schedule_sync()  # type: ignore[attr-defined]
 
         self.app.push_screen(ConfirmScreen(f"Delete “{title}”?"), _after)
 

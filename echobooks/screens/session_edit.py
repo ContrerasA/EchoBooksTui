@@ -92,6 +92,7 @@ class SessionEditScreen(Screen[bool]):
                         media_type=media,
                     )
         self.app.notify(f"Session saved {stars(rating)}".strip())
+        self.app.schedule_sync()  # type: ignore[attr-defined]
         self.dismiss(True)
 
     @on(Button.Pressed, "#delete")
@@ -101,6 +102,7 @@ class SessionEditScreen(Screen[bool]):
             if rs:
                 session.delete(rs)
         self.app.notify("Session deleted")
+        self.app.schedule_sync()  # type: ignore[attr-defined]
         self.dismiss(True)
 
     @on(Button.Pressed, "#cancel")

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+
 from textual import work
 from textual.app import App
 from textual.binding import Binding
@@ -28,6 +30,10 @@ ECHOBOOKS_THEME = Theme(
     boost="#2A2A36",
     dark=True,
 )
+
+# Hard cap on the final flush-on-quit so an unreachable server can't hang exit.
+# A change that doesn't make it up stays dirty and syncs on next launch anyway.
+_SYNC_QUIT_TIMEOUT = 5.0
 
 
 class EchoBooksApp(App[None]):
@@ -142,6 +148,9 @@ class EchoBooksApp(App[None]):
         self.registry = ProviderRegistry(self.settings)
         # Lazily built (only an account user needs it); see sync_client.
         self._sync_client: SyncClient | None = None
+        # True once a local change has been queued but not yet pushed; lets the
+        # on-quit flush know there's something to send (see on_unmount).
+        self._sync_pending = False
 
     @property
     def sync_client(self) -> SyncClient:
@@ -157,9 +166,28 @@ class EchoBooksApp(App[None]):
         if self.settings.is_logged_in():
             self._launch_sync()
 
-    @work(exclusive=True, group="sync")
-    async def _launch_sync(self) -> None:
-        """Best-effort sync on startup. Failures stay silent → app works offline."""
+    def schedule_sync(self) -> None:
+        """Push a local change to the server in the background.
+
+        Screens call this right after committing a mutation (add / edit / delete
+        / status / favorite / session). No-ops when logged out — there's nothing
+        to push to. The work runs in the exclusive ``sync`` worker, so rapid
+        changes coalesce: a new run cancels any in-flight one, and because the
+        sync re-reads *all* dirty rows, the final run still pushes everything.
+        """
+        if not self.settings.is_logged_in():
+            return
+        self._sync_pending = True
+        self._launch_sync()
+
+    async def _do_sync(self) -> int | None:
+        """Run one sync cycle. Returns the count of pulled updates, or None on
+        failure. Shared by the debounced worker and the on-quit flush.
+
+        Failures stay silent → the app keeps working offline. The pending flag
+        only clears on success, so a change that failed to push is retried on
+        quit and on the next launch.
+        """
         from echobooks.db.session import get_sessionmaker
         from echobooks.sync.engine import sync
 
@@ -168,13 +196,30 @@ class EchoBooksApp(App[None]):
                 get_sessionmaker(), self.sync_client, since=self.settings.last_sync or None
             )
         except Exception:
-            return  # offline / server down / token expired — just stay local
+            return None  # offline / server down / token expired — just stay local
         self.settings.last_sync = result.at
         self.settings.save()
-        if result.applied:
-            self.notify(f"Synced — {result.applied} update(s) from your account")
+        self._sync_pending = False
+        return result.applied
+
+    @work(exclusive=True, group="sync")
+    async def _launch_sync(self) -> None:
+        """Best-effort sync on startup and after local changes."""
+        applied = await self._do_sync()
+        if applied:
+            self.notify(f"Synced — {applied} update(s) from your account")
 
     async def on_unmount(self) -> None:
+        # Flush a pending change-triggered sync before we tear down, so adding a
+        # book and immediately quitting still pushes it: the background push may
+        # still be in flight when shutdown cancels its worker. Running the sync
+        # directly here, bounded by a timeout, covers that. Anything that doesn't
+        # make it up stays dirty and syncs on next launch.
+        if self._sync_pending and self.settings.is_logged_in():
+            try:
+                await asyncio.wait_for(self._do_sync(), timeout=_SYNC_QUIT_TIMEOUT)
+            except TimeoutError:
+                pass  # server too slow — change is safe locally, syncs next time
         await self.registry.aclose()
         if self._sync_client is not None:
             await self._sync_client.aclose()

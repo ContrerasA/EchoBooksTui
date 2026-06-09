@@ -183,6 +183,7 @@ class BookFormScreen(Screen[bool]):
                     rating=rating,
                 )
         self.app.notify("Saved" if self.is_edit else f"Added “{draft.title}”")
+        self.app.schedule_sync()  # type: ignore[attr-defined]
         self.dismiss(True)
 
     @on(Button.Pressed, "#cancel")
