@@ -10,6 +10,19 @@ from sqlalchemy.orm import Session
 from echobooks.db import session as dbsession
 
 
+@pytest.fixture(autouse=True)
+def _no_real_keyring(monkeypatch, request):
+    """Keep tests off the developer's real OS keyring by default.
+
+    Settings.save() would otherwise write account tokens into the live keyring on
+    a desktop dev box. Tests that specifically exercise the keyring opt back in by
+    requesting the ``mem_keyring`` fixture (which activates an in-memory backend);
+    everything else runs through the JSON fallback.
+    """
+    if "mem_keyring" not in request.fixturenames:
+        monkeypatch.setenv("ECHOBOOKS_NO_KEYRING", "1")
+
+
 @pytest.fixture
 def session() -> Iterator[Session]:
     """A Session bound to a fresh in-memory SQLite DB, reset between tests."""

@@ -89,6 +89,10 @@ EchoBooks server, you can sign in with Google to sync your catalog across machin
   and the merged catalog syncs back down.
 - **Sync on launch / on demand**: a signed-in app syncs in the background at startup; **Sync now**
   in Settings runs it manually. **Sign out** drops your tokens but keeps the local catalog intact.
+- **Token storage**: your account tokens are kept in the OS keyring (Keychain / Secret Service /
+  Credential Manager), not in `settings.json`. On machines with no keyring (headless servers,
+  some containers) they fall back to `settings.json`; set `ECHOBOOKS_NO_KEYRING=1` to force that.
+  Existing plaintext tokens migrate into the keyring automatically on the next launch.
 
 ## Running your own server
 
@@ -138,5 +142,5 @@ uv run mypy echobooks  # types
 - **Phase 2 — Accounts + sync** *(done)*: optional Google device-flow login, server-issued JWTs,
   FastAPI + Postgres server (reusing the SQLAlchemy models), `/sync/push` + `/sync/pull` with
   last-write-wins, and an import picker for first-login / multi-device.
-- **Phase 3 — Deploy**: `flake.nix` + a NixOS service for the home server; move client tokens
-  from `settings.json` into the OS keyring.
+- **Phase 3 — Hardening / deploy**: client tokens now live in the OS keyring *(done)*; remaining:
+  `flake.nix` + a NixOS service so the home-server deploy is declarative.

@@ -10,6 +10,7 @@ dependencies = [
     "httpx>=0.27",
     "pydantic>=2.7",
     "platformdirs>=4.2",
+    "keyring>=24",     # secure OS-keyring storage for account tokens (graceful fallback)
 ]
 
 [project.optional-dependencies]

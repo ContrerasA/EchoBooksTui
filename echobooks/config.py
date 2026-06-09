@@ -14,7 +14,16 @@ from pathlib import Path
 
 from platformdirs import user_config_dir, user_data_dir
 
+from echobooks import keyring_store
+
 APP_NAME = "echobooks"
+
+# Settings fields that are secrets: kept in the OS keyring when one is available,
+# and never written to settings.json unless we have to fall back.
+_SECRET_FIELDS = {
+    "access_token": keyring_store.ACCESS_KEY,
+    "refresh_token": keyring_store.REFRESH_KEY,
+}
 
 
 def data_dir() -> Path:
@@ -59,9 +68,9 @@ class Settings:
     server_url: str = ""
     username: str = ""
 
-    # Auth tokens issued by the EchoBooks server after Google sign-in. Persisted
-    # to settings.json — fine for a local CLI; a later hardening pass can move
-    # these to the OS keyring.
+    # Auth tokens issued by the EchoBooks server after Google sign-in. These are
+    # secrets: persisted to the OS keyring when one is available, and only written
+    # to settings.json as a fallback (see save/load and _SECRET_FIELDS).
     access_token: str = ""
     refresh_token: str = ""
     user_email: str = ""
@@ -89,14 +98,38 @@ class Settings:
     @classmethod
     def load(cls) -> Settings:
         p = cls.path()
-        if not p.exists():
-            return cls()
-        try:
-            raw = json.loads(p.read_text())
-        except (json.JSONDecodeError, OSError):
-            return cls()
+        raw: dict = {}
+        if p.exists():
+            try:
+                raw = json.loads(p.read_text())
+            except (json.JSONDecodeError, OSError):
+                raw = {}
         known = {k: raw[k] for k in raw if k in cls.__dataclass_fields__}
-        return cls(**known)
+        settings = cls(**known)
+
+        # Overlay secrets from the keyring (the source of truth when available).
+        # If the keyring holds nothing but settings.json still carries a token
+        # (an older install, or a fallback machine), keep the JSON value.
+        if keyring_store.available():
+            stored_in_json = any(raw.get(f) for f in _SECRET_FIELDS)
+            for field_name, key in _SECRET_FIELDS.items():
+                kr_value = keyring_store.get(key)
+                if kr_value is not None:
+                    setattr(settings, field_name, kr_value)
+            # One-time migration: tokens were in plaintext JSON → move them into
+            # the keyring and rewrite settings.json without them.
+            if stored_in_json:
+                settings.save()
+        return settings
 
     def save(self) -> None:
-        self.path().write_text(json.dumps(asdict(self), indent=2))
+        data = asdict(self)
+        use_keyring = keyring_store.available()
+        if use_keyring:
+            # Secrets go to the keyring; strip them from the JSON we write.
+            for field_name, key in _SECRET_FIELDS.items():
+                keyring_store.set(key, getattr(self, field_name) or "")
+                data.pop(field_name, None)
+        # Else: no keyring backend — secrets stay in `data` and land in JSON
+        # (last-resort fallback so login still works on headless boxes).
+        self.path().write_text(json.dumps(data, indent=2))
