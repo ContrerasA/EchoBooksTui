@@ -60,11 +60,38 @@ def _migrate_user_id(engine: Engine) -> None:
                 conn.execute(text(f'ALTER TABLE "{table.name}" ADD COLUMN user_id VARCHAR(32)'))
 
 
+def _repair_missing_authors_once(engine: Engine) -> None:
+    """Run the authorless-book backfill exactly once per database.
+
+    A now-fixed sync bug left some books without authors (see
+    ``repository.repair_missing_authors``). We backfill them on the next launch,
+    guarded by a marker row in ``provider_cache`` (a local-only, un-synced table)
+    so the sweep runs once and never again — even though it is itself idempotent.
+    """
+    from .models import ProviderCache
+    from .repository import repair_missing_authors
+
+    marker = "_repair:missing_authors:v1"
+    factory = sessionmaker(bind=engine, future=True)
+    with factory() as session:
+        if session.get(ProviderCache, marker) is not None:
+            return
+        try:
+            repair_missing_authors(session)
+            session.add(ProviderCache(key=marker, value="done"))
+            session.commit()
+        except Exception:
+            # A repair hiccup must never block startup; leave the marker unset so
+            # the sweep retries next launch. The repair itself is idempotent.
+            session.rollback()
+
+
 def init_db(url: str | None = None, echo: bool = False) -> Engine:
     """Create the engine (if needed) and ensure all tables exist."""
     engine = get_engine(url, echo=echo)
     Base.metadata.create_all(engine)
     _migrate_user_id(engine)
+    _repair_missing_authors_once(engine)
     return engine
 
 

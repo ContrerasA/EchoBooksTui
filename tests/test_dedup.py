@@ -126,3 +126,53 @@ def test_merge_carries_authors_when_survivor_has_none(session: Session):
     keep = repo.get_book(session, ids[0])
     assert keep.author_names == "Frank Herbert"
     assert keep.dirty is True  # repaired survivor re-syncs
+
+
+# -- one-shot repair of books left authorless by the sync bug --------------- #
+def test_repair_borrows_authors_from_a_soft_deleted_duplicate(session: Session):
+    keep = repo.create_book(session, _draft("Mistborn", "Brandon Sanderson"), status=Status.READ)
+    dup = repo.create_book(session, _draft("Mistborn", "Brandon Sanderson"), status=Status.READ)
+    keep.author_links.clear()       # survivor lost its authors to the sync bug
+    repo.soft_delete_book(session, dup)  # the authored copy was already merged away
+    session.flush()
+    assert keep.author_names == "—"
+
+    assert repo.repair_missing_authors(session) == 1
+    session.flush()
+    assert repo.get_book(session, keep.id).author_names == "Brandon Sanderson"
+
+
+def test_repair_recovers_authors_from_provider_cache(session: Session):
+    import json
+
+    from echobooks.db.models import ProviderCache
+
+    book = repo.create_book(
+        session,
+        _draft("Sorcerer's Stone", "J.K. Rowling", source="audible", ext="ASIN1"),
+        status=Status.READ,
+    )
+    book.author_links.clear()
+    session.add(ProviderCache(
+        key="detail:audible:ASIN1",
+        value=json.dumps({"authors": ["J.K. Rowling"], "narrators": ["Jim Dale"]}),
+    ))
+    session.flush()
+
+    assert repo.repair_missing_authors(session) == 1
+    session.flush()
+    fixed = repo.get_book(session, book.id)
+    assert fixed.author_names == "J.K. Rowling"
+    assert fixed.narrator_names == "Jim Dale"
+    assert fixed.dirty is True  # repair syncs
+
+
+def test_repair_is_idempotent_and_skips_unrecoverable(session: Session):
+    # No donor, no cache → stays authorless, and a second run is a no-op.
+    book = repo.create_book(session, _draft("Mystery", "Unknown"), status=Status.WANT)
+    book.author_links.clear()
+    session.flush()
+
+    assert repo.repair_missing_authors(session) == 0
+    assert repo.get_book(session, book.id).author_names == "—"
+    assert repo.repair_missing_authors(session) == 0

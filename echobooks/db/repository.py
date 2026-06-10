@@ -418,6 +418,98 @@ def merge_books(session: Session, survivor_id: str, loser_ids: list[str]) -> Non
 
 
 # --------------------------------------------------------------------------- #
+# One-shot repair: books left authorless by the pre-fix sync link-drop bug
+# --------------------------------------------------------------------------- #
+def _draft_authors_from_cache(session: Session, book: Book) -> tuple[list[str], list[str]]:
+    """Recover a book's author/narrator names from the cached provider draft.
+
+    The provider cache stores the enriched ``BookDraft`` under
+    ``detail:{source}:{external_id}`` (see providers/registry.py). For a book
+    added from a provider that is now authorless, the cached draft still carries
+    its contributors. Returns ``([], [])`` when there's no usable cache entry.
+    """
+    import json
+
+    from .models import ProviderCache
+
+    if not book.external_source or not book.external_id:
+        return [], []
+    row = session.get(ProviderCache, f"detail:{book.external_source}:{book.external_id}")
+    if row is None:
+        return [], []
+    try:
+        data = json.loads(row.value)
+    except (ValueError, TypeError):
+        return [], []
+    authors = [a for a in data.get("authors", []) if isinstance(a, str) and a.strip()]
+    narrators = [n for n in data.get("narrators", []) if isinstance(n, str) and n.strip()]
+    return authors, narrators
+
+
+def repair_missing_authors(session: Session) -> int:
+    """Backfill contributors on live books that lost them to the sync link-drop bug.
+
+    A now-fixed bug (a book pulled before its author entity dropped the link and
+    never re-attached) left some books authorless. For each such book we recover
+    contributors from, in order:
+
+    1. a duplicate (live *or* soft-deleted) sharing the same natural key that still
+       has authors — covers the cross-device duplicate case even post-merge, and
+    2. the cached provider draft (``detail:{source}:{id}``).
+
+    Recovered links go through :func:`set_book_authors`, which reuses existing
+    Author rows by name (no new duplicates), and the book is marked ``dirty`` so the
+    repair syncs. Returns the number of books repaired. Idempotent: books that
+    already have authors, or for which no source exists, are left untouched.
+    """
+    # Index every book that has authors by an *author-independent* key, so an
+    # authorless book can borrow from a duplicate. The normal match key folds the
+    # first author into the "meta" variant — useless here, since the book we're
+    # repairing has no author to key on. Use (source, ext) when present, else
+    # (normalized title, media type). Include soft-deleted books: a merged-away
+    # loser may be the only copy that kept its authors.
+    def _donor_key(b: Book) -> tuple[str, ...]:
+        src = (b.external_source or "").strip().lower()
+        ext = (b.external_id or "").strip().lower()
+        if src and ext and src != "manual":
+            return ("ext", src, ext, b.media_type.value)
+        norm_title = (b.sort_title or _sort_key(b.title or "")).strip().lower()
+        return ("meta", norm_title, b.media_type.value)
+
+    stmt = select(Book).options(
+        selectinload(Book.author_links).selectinload(BookAuthor.author),
+        selectinload(Book.narrator_links).selectinload(BookNarrator.narrator),
+    )
+    all_books = list(session.scalars(stmt).unique().all())
+    donors: dict[tuple[str, ...], Book] = {}
+    for b in all_books:
+        if b.author_links:
+            donors.setdefault(_donor_key(b), b)
+
+    repaired = 0
+    for book in all_books:
+        if book.deleted_at is not None or book.author_links:
+            continue
+        author_names: list[str] = []
+        narrator_names: list[str] = []
+        donor = donors.get(_donor_key(book))
+        if donor is not None:
+            author_names = [link.author.name for link in donor.author_links]
+            narrator_names = [link.narrator.name for link in donor.narrator_links]
+        else:
+            author_names, narrator_names = _draft_authors_from_cache(session, book)
+        if not author_names:
+            continue
+        set_book_authors(session, book, author_names)
+        if narrator_names and not book.narrator_links:
+            set_book_narrators(session, book, narrator_names)
+        book.dirty = True
+        repaired += 1
+    session.flush()
+    return repaired
+
+
+# --------------------------------------------------------------------------- #
 # Reading sessions (reads / re-reads)
 # --------------------------------------------------------------------------- #
 def add_session(
