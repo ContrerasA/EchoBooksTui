@@ -254,6 +254,16 @@ class EchoBooksApp(App[None]):
         from echobooks.db.session import get_sessionmaker
         from echobooks.sync.engine import sync
 
+        # One-time heal: a past watermark bug could advance ``last_sync`` past rows
+        # that were never applied locally, orphaning them (missing books, dropped
+        # authors). Clear the cursor once so the next pull is a full ``since=None``
+        # reconcile — cheap and non-destructive (last-write-wins re-applies current
+        # rows as no-ops). Guarded by a marker so it runs exactly once per install.
+        if not self.settings.extras.get("resync_v1"):
+            self.settings.last_sync = ""
+            self.settings.extras["resync_v1"] = True
+            self.settings.save()
+
         try:
             result = await sync(
                 get_sessionmaker(), self.sync_client, since=self.settings.last_sync or None

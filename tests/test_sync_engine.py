@@ -259,3 +259,29 @@ async def test_import_local_only_pushes_selected(session: Session):
         if t == "book"
     }
     assert server_titles == {"Chosen"}
+
+
+async def test_watermark_tracks_pulled_data_not_wall_clock(session: Session, factory_b):
+    """The next ``since`` must be the newest *pulled* row's timestamp, not now().
+
+    The server filters pulls by ``updated_at > since`` against its own stored
+    timestamps. If the client advanced the watermark to its wall clock, a row
+    whose ``updated_at`` is in the past (relative to the client) but that the
+    client never applied would be skipped on every future pull and orphaned. So
+    the watermark must travel in the server's clock domain.
+    """
+    # Device A seeds the server with a row, then we back-date it to 2020.
+    create_book(session, _draft("Old Server Row"), status=Status.READ)
+    session.commit()
+    server = FakeServer()
+    await server.push(dump_dirty(session))
+    old = datetime(2020, 1, 1, 12, 0, 0)
+    for row in server.store.values():
+        row.updated_at = old  # type: ignore[attr-defined]
+
+    # Device B is empty: nothing dirty to push, so step-1 can't re-stamp anything.
+    result = await sync(factory_b, server, since=None)
+
+    # Watermark is the pulled row's timestamp (2020), NOT today — so a later sync
+    # with since=result.at still re-pulls anything strictly newer than 2020.
+    assert result.at == old.isoformat()

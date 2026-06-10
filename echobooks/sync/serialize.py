@@ -324,8 +324,18 @@ def merge_payload(
 
             if local is not None:
                 local_ts = as_naive_utc(local.updated_at)
-                if local_ts is not None and local_ts >= remote_ts:
-                    continue  # stored copy is same-or-newer: keep it (LWW)
+                if local_ts is not None and local_ts > remote_ts:
+                    continue  # stored copy is strictly newer: keep it (LWW)
+                if local_ts is not None and local_ts == remote_ts:
+                    # Same row, same timestamp: content is identical, so there's
+                    # nothing to overwrite — but the book's *links* carry no
+                    # timestamp of their own and may have been dropped locally by
+                    # an earlier bug. Re-apply just the links so a full re-pull can
+                    # heal a book that lost its authors/narrators/tags, then move on.
+                    if table == "book":
+                        _set_links(session, local, wire, owner_id=owner_id)
+                        winners.append(entity_to_wire(table, local))
+                    continue
             if local is None:
                 local = model(id=wire.id)
                 session.add(local)

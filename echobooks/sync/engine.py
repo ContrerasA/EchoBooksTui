@@ -77,12 +77,32 @@ async def sync(
         applied = apply_remote(session, incoming)
         session.commit()
 
+    # Advance the watermark to the newest row we actually pulled — *in the
+    # server's clock domain* — never to our own wall clock. The server filters
+    # the next pull by ``updated_at > since`` against its stored timestamps, so a
+    # client-side ``now`` (which can run ahead of the server, or ahead of a row
+    # whose updated_at is in the past) would skip rows we never applied and
+    # orphan them forever. Carrying the max observed ``updated_at`` forward means
+    # a row is only ever excluded from a future pull once we've genuinely seen it.
+    # Keep the old watermark when a pull returns nothing, so we never go backwards.
+    at = _max_updated_at(incoming) or since or _now_iso()
+
     return SyncResult(
         pushed=len(outgoing.rows),
         pulled=len(incoming.rows),
         applied=applied,
-        at=_now_iso(),
+        at=at,
     )
+
+
+def _max_updated_at(payload: SyncPayload) -> str | None:
+    """The newest ``updated_at`` among pulled rows, ISO-formatted, or None if empty.
+
+    This becomes the next ``since`` cursor, so it must be in the same clock domain
+    the server filters on (the rows' own timestamps), not the client's wall clock.
+    """
+    stamps = [r.updated_at for r in payload.rows if r.updated_at is not None]
+    return max(stamps).isoformat() if stamps else None
 
 
 async def import_local(

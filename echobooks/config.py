@@ -76,7 +76,8 @@ class Settings:
     user_email: str = ""
     last_sync: str = ""  # ISO timestamp of the last successful pull
 
-    # Non-persisted convenience fields.
+    # Misc persisted flags that don't warrant their own field (e.g. one-shot
+    # migration markers like ``resync_v1``). Round-trips through save/load.
     extras: dict = field(default_factory=dict)
 
     def is_logged_in(self) -> bool:
