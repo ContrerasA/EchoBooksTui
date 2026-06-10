@@ -13,7 +13,7 @@ from collections import Counter
 from datetime import date
 from typing import TYPE_CHECKING, NamedTuple
 
-from sqlalchemy import func, or_, select
+from sqlalchemy import and_, func, or_, select
 from sqlalchemy.orm import Session, selectinload
 
 from .models import (
@@ -556,9 +556,40 @@ class Totals(NamedTuple):
         return round(self.minutes_listened / 60, 1)
 
 
+def _is_finish():
+    """Predicate for a reading session that counts as a finish.
+
+    A finish is a *completed* session that hasn't been soft-deleted. Every
+    "read" stat joins on this rather than on book status, so re-reads still
+    count while a tombstoned session — e.g. an accidental "Read" later undone —
+    correctly drops out. Soft-deleted sessions keep their ``finished_on``, so
+    filtering on that column alone would over-count.
+    """
+    return and_(
+        ReadingSession.finished_on.is_not(None),
+        ReadingSession.deleted_at.is_(None),
+    )
+
+
 def _finished_join(stmt):
     return stmt.join(ReadingSession, ReadingSession.book_id == Book.id).where(
-        ReadingSession.finished_on.is_not(None)
+        _is_finish(), Book.deleted_at.is_(None)
+    )
+
+
+def _finished_book_ids():
+    """Subquery of distinct book ids that have at least one live finish.
+
+    Joins :class:`Book` so finishes on soft-deleted books drop out — that keeps
+    the chart queries (top authors/narrators/genres) in step with the headline
+    ``finishes`` total, which counts the same set.
+    """
+    return (
+        select(ReadingSession.book_id)
+        .join(Book, Book.id == ReadingSession.book_id)
+        .where(_is_finish(), Book.deleted_at.is_(None))
+        .distinct()
+        .subquery()
     )
 
 
@@ -607,12 +638,7 @@ def totals(session: Session) -> Totals:
 
 
 def top_authors(session: Session, limit: int = 10) -> list[tuple[str, int]]:
-    finished = (
-        select(ReadingSession.book_id)
-        .where(ReadingSession.finished_on.is_not(None))
-        .distinct()
-        .subquery()
-    )
+    finished = _finished_book_ids()
     n = func.count(func.distinct(BookAuthor.book_id))
     stmt = (
         select(Author.name, n)
@@ -626,12 +652,7 @@ def top_authors(session: Session, limit: int = 10) -> list[tuple[str, int]]:
 
 
 def top_narrators(session: Session, limit: int = 10) -> list[tuple[str, int]]:
-    finished = (
-        select(ReadingSession.book_id)
-        .where(ReadingSession.finished_on.is_not(None))
-        .distinct()
-        .subquery()
-    )
+    finished = _finished_book_ids()
     n = func.count(func.distinct(BookNarrator.book_id))
     stmt = (
         select(Narrator.name, n)
@@ -646,7 +667,9 @@ def top_narrators(session: Session, limit: int = 10) -> list[tuple[str, int]]:
 
 def finishes_by_year(session: Session) -> list[tuple[int, int]]:
     dates = session.scalars(
-        select(ReadingSession.finished_on).where(ReadingSession.finished_on.is_not(None))
+        select(ReadingSession.finished_on)
+        .join(Book, Book.id == ReadingSession.book_id)
+        .where(_is_finish(), Book.deleted_at.is_(None))
     ).all()
     counts = Counter(d.year for d in dates if d is not None)
     return sorted(counts.items())
@@ -654,7 +677,13 @@ def finishes_by_year(session: Session) -> list[tuple[int, int]]:
 
 def rating_distribution(session: Session) -> list[tuple[float, int]]:
     ratings = session.scalars(
-        select(ReadingSession.rating).where(ReadingSession.rating.is_not(None))
+        select(ReadingSession.rating)
+        .join(Book, Book.id == ReadingSession.book_id)
+        .where(
+            ReadingSession.rating.is_not(None),
+            ReadingSession.deleted_at.is_(None),
+            Book.deleted_at.is_(None),
+        )
     ).all()
     counts = Counter(float(r) for r in ratings if r is not None)
     return sorted(counts.items())
@@ -670,12 +699,7 @@ def media_breakdown(session: Session) -> list[tuple[MediaType, int]]:
 
 
 def genre_breakdown(session: Session, limit: int = 10) -> list[tuple[str, int]]:
-    finished = (
-        select(ReadingSession.book_id)
-        .where(ReadingSession.finished_on.is_not(None))
-        .distinct()
-        .subquery()
-    )
+    finished = _finished_book_ids()
     n = func.count(func.distinct(book_tag.c.book_id))
     stmt = (
         select(Tag.name, n)

@@ -281,6 +281,11 @@ class EchoBooksApp(App[None]):
         applied = await self._do_sync()
         if applied:
             self.notify(f"Synced — {applied} update(s) from your account")
+            # The library was rendered from the DB before this background sync
+            # landed, so refresh it in place — otherwise the pulled books stay
+            # invisible until the user navigates away and back.
+            if isinstance(self.screen, LibraryScreen):
+                self.screen.reload()
             self._check_duplicates()
 
     def _check_duplicates(self) -> None:

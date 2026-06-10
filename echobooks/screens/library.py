@@ -39,18 +39,27 @@ class BooksTable(DataTable):
 
     Stock ``DataTable`` scrolls only the viewport on a wheel tick, leaving the
     selected row behind. Here a tick moves the cursor up/down like the arrow
-    keys instead; the cursor move auto-scrolls the viewport to keep it visible.
+    keys instead; the cursor move auto-scrolls the viewport only when needed to
+    keep the selected row on screen.
+
+    ``prevent_default()`` is essential, not decorative: Textual dispatches an
+    event to the matching handler in *every* class on the MRO, so a bare
+    ``stop()`` (which only halts bubbling to ancestors) still lets the base
+    ``Widget`` wheel handler run and scroll the viewport on top of our cursor
+    move. Suppressing the default action is what keeps the page from drifting.
     """
 
     def _on_mouse_scroll_down(self, event: events.MouseScrollDown) -> None:
         if event.ctrl or event.shift:
             return  # leave horizontal scroll to the default handler
+        event.prevent_default()
         event.stop()
         self.action_cursor_down()
 
     def _on_mouse_scroll_up(self, event: events.MouseScrollUp) -> None:
         if event.ctrl or event.shift:
             return
+        event.prevent_default()
         event.stop()
         self.action_cursor_up()
 
