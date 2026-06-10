@@ -41,7 +41,7 @@ def test_parse_date():
 
 def test_stars():
     assert stars(5.0) == "★★★★★"
-    assert stars(4.5) == "★★★★½"
+    assert stars(4.5) == "★★★★⯨"
     assert stars(None) == "—"
 
 

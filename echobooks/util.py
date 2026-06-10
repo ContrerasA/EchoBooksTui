@@ -66,7 +66,7 @@ def stars(rating: float | None) -> str:
         return "—"
     full = int(rating)
     half = 1 if rating - full >= 0.5 else 0
-    return "★" * full + ("½" if half else "")
+    return "★" * full + ("⯨" if half else "")
 
 
 def split_csv(text: str) -> list[str]:
