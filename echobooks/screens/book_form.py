@@ -40,11 +40,15 @@ class BookFormScreen(LabelledFields, Screen[bool]):
         *,
         book_id: str | None = None,
         status: Status = Status.WANT,
+        rating: float | None = None,
+        review: str | None = None,
     ) -> None:
         super().__init__()
         self.draft = draft
         self.book_id = book_id
         self.initial_status = status
+        self.rating = rating
+        self.review = review
 
     @property
     def is_edit(self) -> bool:
@@ -106,11 +110,20 @@ class BookFormScreen(LabelledFields, Screen[bool]):
             )
             yield _field("Description", TextArea(d.description or "", id="f-description"))
 
+            # The verdict — your overall rating + review for the book (both modes).
+            rating_str = str(self.rating) if self.rating is not None else ""
+            yield Horizontal(
+                _field("Rating (0.5–5)", Input(rating_str, id="f-rating")),
+                Vertical(classes="field"),  # spacer keeps the rating field half-width
+                classes="form-row",
+            )
+            yield _field("Review", TextArea(self.review or "", id="f-review"))
+
+            # Reading dates seed the first session and only make sense at create.
             if not self.is_edit:
                 yield Horizontal(
                     _field("Started (YYYY-MM-DD)", Input(id="f-started")),
                     _field("Finished (YYYY-MM-DD)", Input(id="f-finished")),
-                    _field("Rating (0.5–5)", Input(id="f-rating")),
                     classes="form-row",
                 )
 
@@ -178,6 +191,8 @@ class BookFormScreen(LabelledFields, Screen[bool]):
         self.app.push_screen(DuplicateBookScreen(dup_title, dup_status), _after)
 
     def _commit(self, draft: BookDraft, status: Status) -> None:
+        rating = parse_rating(self.query_one("#f-rating", Input).value)
+        review = self.query_one("#f-review", TextArea).text.strip() or None
         with session_scope() as session:
             if self.is_edit:
                 book = get_book(session, self.book_id)  # type: ignore[arg-type]
@@ -185,13 +200,14 @@ class BookFormScreen(LabelledFields, Screen[bool]):
                     self.dismiss(False)
                     return
                 update_book(session, book, draft)
+                book.rating = rating
+                book.review = review
                 if book.status != status:
                     set_status(session, book, status)
                 self.app.pending_focus_book_id = book.id  # type: ignore[attr-defined]
             else:
                 started = parse_date(self.query_one("#f-started", Input).value)
                 finished = parse_date(self.query_one("#f-finished", Input).value)
-                rating = parse_rating(self.query_one("#f-rating", Input).value)
                 book = create_book(
                     session,
                     draft,
@@ -199,6 +215,7 @@ class BookFormScreen(LabelledFields, Screen[bool]):
                     started_on=started,
                     finished_on=finished,
                     rating=rating,
+                    review=review,
                 )
                 self.app.pending_focus_book_id = book.id  # type: ignore[attr-defined]
         self.app.notify("Saved" if self.is_edit else f"Added “{draft.title}”")

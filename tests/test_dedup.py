@@ -78,7 +78,8 @@ def test_merge_moves_history_and_tombstones_loser(session: Session):
                                 status=Status.WANT)
     loser = repo.create_book(session, _draft("1984", "George Orwell", MediaType.PRINT),
                              status=Status.READ)
-    repo.add_session(session, loser, finished_on=date(2025, 6, 1), rating=4.5)
+    repo.add_session(session, loser, finished_on=date(2025, 6, 1))
+    loser.rating = 4.5
     loser.is_favorite = True
     session.flush()
 
@@ -93,7 +94,8 @@ def test_merge_moves_history_and_tombstones_loser(session: Session):
     # Reading history + favorite carried onto the survivor (the loser had an
     # auto-created READ session plus the explicit one we added).
     assert len(keep.sessions) == 2
-    assert 4.5 in {s.rating for s in keep.sessions}
+    # The book-level rating carries onto the survivor (which had none).
+    assert keep.rating == 4.5
     assert keep.is_favorite is True
     # Survivor was WANT, adopts the loser's more meaningful READ status.
     assert keep.status == Status.READ

@@ -2,8 +2,9 @@
 
 Stats model: a *finish* is a :class:`ReadingSession` row with ``finished_on`` set.
 Marking a book READ always guarantees one finished session (see :func:`set_status`
-and :func:`create_book`), and re-reads add more. So every "read" metric is derived
-purely from sessions — re-reads count, and the numbers stay internally consistent.
+and :func:`create_book`), and re-reads add more — so counts/dates derive from
+sessions. The verdict (``rating`` / ``review``) lives on the :class:`Book` itself,
+one per book regardless of how many times it was read.
 """
 
 from __future__ import annotations
@@ -128,6 +129,7 @@ def create_book(
     started_on: date | None = None,
     finished_on: date | None = None,
     rating: float | None = None,
+    review: str | None = None,
 ) -> Book:
     """Create a Book from a draft, attaching authors/narrators/genres."""
     book = Book(
@@ -147,6 +149,8 @@ def create_book(
         series_position=draft.series_position,
         external_source=draft.external_source,
         external_id=draft.external_id,
+        rating=rating,
+        review=review,
     )
     session.add(book)
     session.flush()
@@ -160,10 +164,9 @@ def create_book(
             book,
             started_on=started_on,
             finished_on=finished_on or date.today(),
-            rating=rating,
         )
-    elif rating is not None or started_on is not None:
-        add_session(session, book, started_on=started_on, rating=rating)
+    elif started_on is not None:
+        add_session(session, book, started_on=started_on)
     session.flush()
     return book
 
@@ -413,6 +416,13 @@ def merge_books(session: Session, survivor_id: str, loser_ids: list[str]) -> Non
         if survivor.status == Status.WANT and loser.status != Status.WANT:
             survivor.status = loser.status
             survivor.dirty = True
+        # Keep the loser's verdict when the survivor has none of its own.
+        if survivor.rating is None and loser.rating is not None:
+            survivor.rating = loser.rating
+            survivor.dirty = True
+        if not survivor.review and loser.review:
+            survivor.review = loser.review
+            survivor.dirty = True
         soft_delete_book(session, loser)
     session.flush()
 
@@ -518,16 +528,12 @@ def add_session(
     *,
     started_on: date | None = None,
     finished_on: date | None = None,
-    rating: float | None = None,
-    review: str | None = None,
     media_type: MediaType | None = None,
 ) -> ReadingSession:
     rs = ReadingSession(
         book_id=book.id,
         started_on=started_on,
         finished_on=finished_on,
-        rating=rating,
-        review=review,
         media_type=media_type,
     )
     session.add(rs)
@@ -677,12 +683,8 @@ def finishes_by_year(session: Session) -> list[tuple[int, int]]:
 
 def rating_distribution(session: Session) -> list[tuple[float, int]]:
     ratings = session.scalars(
-        select(ReadingSession.rating)
-        .join(Book, Book.id == ReadingSession.book_id)
-        .where(
-            ReadingSession.rating.is_not(None),
-            ReadingSession.deleted_at.is_(None),
-            Book.deleted_at.is_(None),
+        select(Book.rating).where(
+            Book.rating.is_not(None), Book.deleted_at.is_(None)
         )
     ).all()
     counts = Counter(float(r) for r in ratings if r is not None)

@@ -135,8 +135,7 @@ class EchoBooksApp(App[None]):
     }
     .field Select { margin: 0 0 1 0; }
     .field Select SelectCurrent { border: none; height: 1; background: #2A2A38; }
-    #f-description {
-        height: 4;
+    #f-description, #f-review {
         background: #2A2A38;
         scrollbar-size-vertical: 1;
         scrollbar-background: #2A2A38;
@@ -146,6 +145,9 @@ class EchoBooksApp(App[None]):
         scrollbar-color-hover: $secondary;
         scrollbar-color-active: $secondary;
     }
+    #f-description { height: 4; }
+    /* 5 visible lines + the TextArea's 1-cell top/bottom border. */
+    #f-review { height: 7; }
 
     .stat-grid { layout: grid; grid-size: 4; grid-gutter: 1; height: auto; }
     .stat-card {

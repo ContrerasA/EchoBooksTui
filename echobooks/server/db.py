@@ -15,6 +15,7 @@ from sqlalchemy import Engine, create_engine
 from sqlalchemy.orm import Session, sessionmaker
 
 from echobooks.db.models import Base
+from echobooks.db.schema import add_missing_columns
 
 # Importing models registers User + the catalog tables on Base.metadata.
 from echobooks.server import models  # noqa: F401
@@ -36,6 +37,9 @@ def get_engine() -> Engine:
 def init_db() -> Engine:
     engine = get_engine()
     Base.metadata.create_all(engine)
+    # Book gained rating/review (moved off ReadingSession); add them to an
+    # existing catalog so incoming synced values have somewhere to land.
+    add_missing_columns(engine, "book", {"rating": "FLOAT", "review": "TEXT"})
     return engine
 
 

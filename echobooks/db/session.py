@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session, sessionmaker
 from echobooks.config import database_url
 
 from .models import Base
+from .schema import add_missing_columns
 
 _engine: Engine | None = None
 _Session: sessionmaker[Session] | None = None
@@ -60,6 +61,60 @@ def _migrate_user_id(engine: Engine) -> None:
                 conn.execute(text(f'ALTER TABLE "{table.name}" ADD COLUMN user_id VARCHAR(32)'))
 
 
+def _migrate_book_rating_review_once(engine: Engine) -> None:
+    """Lift rating/review from reading sessions up to the book, exactly once.
+
+    These fields used to live on each ``ReadingSession``; they now belong to the
+    ``Book``. After :func:`echobooks.db.schema.add_missing_columns` adds the new
+    columns, this backfills each book from its sessions: ``rating`` = the best
+    session rating, ``review`` = the review of that best-rated session. Touched
+    books are marked dirty so the values sync up. Guarded by a marker row in
+    ``provider_cache`` (local-only, un-synced) so it runs once.
+
+    Reads the old session columns through the raw table, since the ORM model no
+    longer declares them.
+    """
+    from .models import Book, ProviderCache
+
+    marker = "_migrate:rating_review_to_book:v1"
+    factory = sessionmaker(bind=engine, future=True)
+    with factory() as session:
+        if session.get(ProviderCache, marker) is not None:
+            return
+        inspector = inspect(engine)
+        rs_cols = {c["name"] for c in inspector.get_columns("reading_session")}
+        if not {"rating", "review"} <= rs_cols:
+            # Fresh DB created after the split — nothing to lift.
+            session.add(ProviderCache(key=marker, value="done"))
+            session.commit()
+            return
+        try:
+            # Best-rated session per book (and its review). NULLs sort last so a
+            # rated session wins over an unrated one; ties break on recency.
+            rows = session.execute(
+                text(
+                    "SELECT book_id, rating, review FROM reading_session "
+                    "WHERE deleted_at IS NULL AND rating IS NOT NULL "
+                    "ORDER BY rating DESC, finished_on DESC, created_at DESC"
+                )
+            ).all()
+            best: dict[str, tuple[float, str | None]] = {}
+            for book_id, rating, review in rows:
+                best.setdefault(book_id, (rating, review))
+            for book_id, (rating, review) in best.items():
+                book = session.get(Book, book_id)
+                if book is None or book.deleted_at is not None:
+                    continue
+                book.rating = rating
+                book.review = review
+                book.dirty = True
+            session.add(ProviderCache(key=marker, value="done"))
+            session.commit()
+        except Exception:
+            # Never block startup; leave the marker unset to retry next launch.
+            session.rollback()
+
+
 def _repair_missing_authors_once(engine: Engine) -> None:
     """Run the authorless-book backfill exactly once per database.
 
@@ -91,6 +146,8 @@ def init_db(url: str | None = None, echo: bool = False) -> Engine:
     engine = get_engine(url, echo=echo)
     Base.metadata.create_all(engine)
     _migrate_user_id(engine)
+    add_missing_columns(engine, "book", {"rating": "FLOAT", "review": "TEXT"})
+    _migrate_book_rating_review_once(engine)
     _repair_missing_authors_once(engine)
     return engine
 

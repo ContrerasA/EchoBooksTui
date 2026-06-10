@@ -58,7 +58,7 @@ class BookDetailScreen(Screen[None]):
 
     def on_mount(self) -> None:
         table = self.query_one("#sessions", DataTable)
-        table.add_columns("Started", "Finished", "Rating", "Media", "Review")
+        table.add_columns("Started", "Finished", "Media")
         self.reload()
 
     def on_screen_resume(self) -> None:
@@ -84,9 +84,7 @@ class BookDetailScreen(Screen[None]):
                 table.add_row(
                     s.started_on.isoformat() if s.started_on else "—",
                     s.finished_on.isoformat() if s.finished_on else "—",
-                    stars(s.rating),
                     (s.media_type.label if s.media_type else "—"),
-                    (s.review or "")[:50],
                     key=s.id,
                 )
 
@@ -114,8 +112,11 @@ class BookDetailScreen(Screen[None]):
                 return
             draft = book_to_draft(book)
             status = book.status
+            rating, review = book.rating, book.review
         self.app.push_screen(
-            BookFormScreen(draft, book_id=self.book_id, status=status),
+            BookFormScreen(
+                draft, book_id=self.book_id, status=status, rating=rating, review=review
+            ),
             lambda _saved: self.reload(),
         )
 
@@ -194,8 +195,8 @@ def _render_meta(book) -> str:
         facts.append(f"⏱ {format_runtime(book.runtime_min)}")
     elif book.page_count:
         facts.append(f"📄 {book.page_count} pages")
-    if book.best_rating:
-        facts.append(f"{stars(book.best_rating)}")
+    if book.rating:
+        facts.append(f"{stars(book.rating)}")
     lines.append("  ·  ".join(facts))
 
     if book.series_name:
@@ -213,6 +214,10 @@ def _render_meta(book) -> str:
     genres = [t.name for t in book.tags if t.kind == "genre"]
     if genres:
         lines.append(f"Genres: {', '.join(genres)}")
+    if book.review:
+        lines.append("")
+        lines.append("[b]Review[/b]")
+        lines.append(book.review)
     if book.description:
         lines.append("")
         lines.append(book.description)

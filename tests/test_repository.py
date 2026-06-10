@@ -109,12 +109,29 @@ def test_rereads_count_as_finishes(session: Session):
         session, _audiobook("PHM", "Andy Weir", 970),
         status=Status.READ, finished_on=date(2025, 1, 1),
     )
-    repo.add_session(session, book, finished_on=date(2026, 1, 1), rating=5.0)
+    repo.add_session(session, book, finished_on=date(2026, 1, 1))
     session.flush()
     t = repo.totals(session)
     assert t.finishes == 2  # original + re-listen
     assert t.minutes_listened == 970 * 2  # hours counted twice
     assert repo.finishes_by_year(session) == [(2025, 1), (2026, 1)]
+
+
+def test_rating_and_review_live_on_book(session: Session):
+    book = repo.create_book(
+        session, _print("Dune", "Frank Herbert", 412),
+        status=Status.READ, finished_on=date(2025, 1, 1),
+        rating=4.0, review="A classic.",
+    )
+    session.flush()
+    assert book.rating == 4.0
+    assert book.review == "A classic."
+    # The verdict is the book's, regardless of how many sessions it has.
+    assert dict(repo.rating_distribution(session)) == {4.0: 1}
+    # A second read (re-listen) doesn't add another rating row.
+    repo.add_session(session, book, finished_on=date(2026, 1, 1))
+    session.flush()
+    assert dict(repo.rating_distribution(session)) == {4.0: 1}
 
 
 def test_marking_read_creates_finish(session: Session):

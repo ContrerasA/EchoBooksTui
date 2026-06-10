@@ -140,7 +140,7 @@ class LibraryScreen(LabelledFields, Screen[None]):
                     _series_label(book),
                     book.media_type.label,
                     book.status.label,
-                    stars(book.best_rating),
+                    stars(book.rating),
                     length,
                 ]
                 self._rows.append((book.id, cells))
@@ -257,10 +257,15 @@ class LibraryScreen(LabelledFields, Screen[None]):
                 return
             draft = book_to_draft(book)
             status = book.status
+            rating, review = book.rating, book.review
         # No reload callback: on_screen_resume already reloads when we return,
         # and a second reload would clear the cursor we just restored to the
         # edited book (see _focus_pending_book).
-        self.app.push_screen(BookFormScreen(draft, book_id=book_id, status=status))
+        self.app.push_screen(
+            BookFormScreen(
+                draft, book_id=book_id, status=status, rating=rating, review=review
+            )
+        )
 
     def action_delete(self) -> None:
         from echobooks.screens.confirm import ConfirmScreen

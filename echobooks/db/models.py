@@ -127,6 +127,11 @@ class Book(SyncMixin, Base):
     external_id: Mapped[str | None] = mapped_column(String, default=None)
     is_favorite: Mapped[bool] = mapped_column(Boolean, default=False)
 
+    # Overall rating/review for the book. Reading sessions track only *when* it
+    # was read; the verdict lives here so a book has one rating and one review.
+    rating: Mapped[float | None] = mapped_column(Float, default=None)  # 0.5 .. 5.0
+    review: Mapped[str | None] = mapped_column(Text, default=None)
+
     author_links: Mapped[list[BookAuthor]] = relationship(
         back_populates="book",
         cascade="all, delete-orphan",
@@ -154,11 +159,6 @@ class Book(SyncMixin, Base):
     @property
     def narrator_names(self) -> str:
         return ", ".join(n.name for n in self.narrators) or "—"
-
-    @property
-    def best_rating(self) -> float | None:
-        rated = [s.rating for s in self.sessions if s.rating is not None]
-        return max(rated) if rated else None
 
 
 class Author(SyncMixin, Base):
@@ -242,8 +242,6 @@ class ReadingSession(SyncMixin, Base):
     book_id: Mapped[str] = mapped_column(ForeignKey("book.id", ondelete="CASCADE"))
     started_on: Mapped[date | None] = mapped_column(Date, default=None)
     finished_on: Mapped[date | None] = mapped_column(Date, default=None)
-    rating: Mapped[float | None] = mapped_column(Float, default=None)  # 0.5 .. 5.0
-    review: Mapped[str | None] = mapped_column(Text, default=None)
     # Optional per-session override (e.g. read in print, re-listened on audio).
     media_type: Mapped[MediaType | None] = mapped_column(Enum(MediaType), default=None)
     progress: Mapped[int | None] = mapped_column(Integer, default=None)  # percent 0..100

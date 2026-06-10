@@ -55,7 +55,6 @@ async def test_app_flow(app_env):
         await pilot.press("n")
         await pilot.pause()
         app.screen.query_one("#s-finished").value = "2026-06-01"
-        app.screen.query_one("#s-rating").value = "4.5"
         await pilot.press("ctrl+s")
         await pilot.pause()
         await pilot.pause()
