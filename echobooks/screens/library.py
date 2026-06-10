@@ -34,6 +34,27 @@ _FLEX_COLS = (0, 1, 2)
 _FLEX_MIN = {0: 12, 1: 10, 2: 10}
 
 
+class BooksTable(DataTable):
+    """The catalog table, with the mouse wheel moving the cursor row.
+
+    Stock ``DataTable`` scrolls only the viewport on a wheel tick, leaving the
+    selected row behind. Here a tick moves the cursor up/down like the arrow
+    keys instead; the cursor move auto-scrolls the viewport to keep it visible.
+    """
+
+    def _on_mouse_scroll_down(self, event: events.MouseScrollDown) -> None:
+        if event.ctrl or event.shift:
+            return  # leave horizontal scroll to the default handler
+        event.stop()
+        self.action_cursor_down()
+
+    def _on_mouse_scroll_up(self, event: events.MouseScrollUp) -> None:
+        if event.ctrl or event.shift:
+            return
+        event.stop()
+        self.action_cursor_up()
+
+
 class LibraryScreen(LabelledFields, Screen[None]):
     BINDINGS = [
         Binding("a", "add", "Add book"),
@@ -60,7 +81,7 @@ class LibraryScreen(LabelledFields, Screen[None]):
                 Select(_SORT_OPTIONS, value="author", allow_blank=False, id="sort"),
                 classes="narrow",
             )
-        yield DataTable(id="books", cursor_type="row", zebra_stripes=False, cell_padding=1)
+        yield BooksTable(id="books", cursor_type="row", zebra_stripes=False, cell_padding=1)
         yield Footer()
 
     def on_mount(self) -> None:
