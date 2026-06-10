@@ -58,6 +58,10 @@ ENTITY_MODELS: dict[str, type[Any]] = {
 # which are carried in dedicated wire fields). Computed once from the mapping.
 _SYNC_COLS = {"id", "created_at", "updated_at", "deleted_at", "dirty", "user_id"}
 
+# Naive-UTC epoch sentinel for placeholder entities created when a book's link
+# target hasn't synced yet — guarantees the real entity wins LWW on arrival.
+_EPOCH = datetime(1970, 1, 1)
+
 
 def _content_columns(model: type[Any]) -> list[str]:
     return [c.key for c in model.__table__.columns if c.key not in _SYNC_COLS]
@@ -196,30 +200,60 @@ def as_naive_utc(dt: datetime | None) -> datetime | None:
     return dt
 
 
-def _set_links(session: Session, book: Book, wire: EntityWire) -> None:
+def _ensure_entity(session: Session, model: type[Any], target_id: str, owner_id: str | None) -> Any:
+    """Fetch a link target, materializing an empty placeholder if it hasn't synced yet.
+
+    A book's link rows travel *with the book*, but the author/narrator/tag entity
+    they point at is a separate syncable row that may arrive in a *different* pull —
+    the incremental ``since`` cursor can deliver a book before (or after) an entity
+    it references. If we dropped a link whose target wasn't present yet, the link
+    would be lost forever: the book is marked clean and never re-applied, so the
+    entity arriving in a later round would never re-attach. Instead we create a
+    placeholder row with the known id; when the real entity arrives it overwrites
+    this stub by last-write-wins on the same id, filling in name/bio/etc.
+    """
+    obj = session.get(model, target_id)
+    if obj is None:
+        # updated_at at the epoch so the real entity (any real timestamp) always
+        # wins LWW when it arrives; dirty=False so this stub is never pushed and
+        # can't clobber the real row on the server with an empty name.
+        obj = model(
+            id=target_id,
+            user_id=owner_id,
+            created_at=_EPOCH,
+            updated_at=_EPOCH,
+            dirty=False,
+        )
+        session.add(obj)
+        session.flush()
+    return obj
+
+
+def _set_links(
+    session: Session, book: Book, wire: EntityWire, owner_id: str | None = None
+) -> None:
     """Replace a book's author/narrator/tag links from the wire row.
 
-    Link targets are merged in the same payload (entities sort before books), so
-    by the time we apply a book its authors/narrators/tags already exist.
+    Link targets are usually merged in the same payload (entities sort before
+    books). When a target hasn't arrived yet we materialize a placeholder rather
+    than drop the link — see :func:`_ensure_entity`.
     """
     if wire.authors is not None:
         book.author_links.clear()
         session.flush()
         for link in wire.authors:
-            author = session.get(Author, link.target_id)
-            if author is not None:
-                book.author_links.append(BookAuthor(author=author, position=link.position))
+            author = _ensure_entity(session, Author, link.target_id, owner_id)
+            book.author_links.append(BookAuthor(author=author, position=link.position))
     if wire.narrators is not None:
         book.narrator_links.clear()
         session.flush()
         for link in wire.narrators:
-            narrator = session.get(Narrator, link.target_id)
-            if narrator is not None:
-                book.narrator_links.append(
-                    BookNarrator(narrator=narrator, position=link.position)
-                )
+            narrator = _ensure_entity(session, Narrator, link.target_id, owner_id)
+            book.narrator_links.append(
+                BookNarrator(narrator=narrator, position=link.position)
+            )
     if wire.tags is not None:
-        tags = [t for t in (session.get(Tag, lk.target_id) for lk in wire.tags) if t]
+        tags = [_ensure_entity(session, Tag, lk.target_id, owner_id) for lk in wire.tags]
         book.tags = tags
 
 
@@ -303,7 +337,7 @@ def merge_payload(
             local.user_id = owner_id
             session.flush()
             if table == "book":
-                _set_links(session, local, wire)
+                _set_links(session, local, wire, owner_id=owner_id)
             winners.append(entity_to_wire(table, local))
     session.flush()
     return winners

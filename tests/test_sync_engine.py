@@ -159,6 +159,37 @@ def test_soft_delete_propagates(session: Session, factory_b):
         assert b.get(Book, book.id).deleted_at is not None
 
 
+def test_book_arriving_before_its_author_keeps_the_link(session: Session, factory_b):
+    """A book pulled before its author entity must not lose its author.
+
+    The incremental ``since`` cursor can split a book and the author it references
+    across two pulls (the book was touched more recently than the long-lived,
+    shared author — e.g. a series author on many books). If the book applied first
+    and dropped the link, the author arriving later would never re-attach. Regression
+    test: the link survives as a placeholder and the real author fills it in.
+    """
+    book = create_book(session, _draft("Mistborn", "Brandon Sanderson"), status=Status.READ)
+    session.commit()
+    payload = dump_dirty(session)
+    author_rows = SyncPayload(rows=[r for r in payload.rows if r.table == "author"])
+    other_rows = SyncPayload(rows=[r for r in payload.rows if r.table != "author"])
+
+    with factory_b() as b:
+        # Round 1: the book arrives WITHOUT its author.
+        apply_remote(b, other_rows)
+        b.commit()
+        got = b.get(Book, book.id)
+        assert [link.author_id for link in got.author_links] == [book.authors[0].id]
+
+        # Round 2: the author entity arrives and backfills the name.
+        apply_remote(b, author_rows)
+        b.commit()
+        got = b.get(Book, book.id)
+        assert got.author_names == "Brandon Sanderson"
+        # The placeholder must never have been pushed back / marked dirty.
+        assert b.get(type(book.authors[0]), book.authors[0].id).dirty is False
+
+
 # --------------------------------------------------------------------------- #
 # import_local: only chosen books go up
 # --------------------------------------------------------------------------- #

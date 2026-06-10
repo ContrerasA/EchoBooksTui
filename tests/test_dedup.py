@@ -99,3 +99,30 @@ def test_merge_moves_history_and_tombstones_loser(session: Session):
     assert keep.status == Status.READ
     # Only one live "1984" remains, so it's no longer flagged as a duplicate.
     assert repo.find_duplicate_groups(session) == []
+
+
+def test_merge_carries_authors_when_survivor_has_none(session: Session):
+    """A merge must never leave an authorless survivor when a loser had authors.
+
+    The deterministic survivor (min id) is an arbitrary winner; if it's the copy
+    that lost its author links to a sync race, fold the loser's contributors in
+    rather than soft-deleting the only authored copy.
+    """
+    a = repo.create_book(session, _draft("Dune", "Frank Herbert", MediaType.PRINT),
+                         status=Status.WANT)
+    b = repo.create_book(session, _draft("Dune", "Frank Herbert", MediaType.PRINT),
+                         status=Status.WANT)
+    ids = sorted([a.id, b.id])
+    # Strip the *survivor*'s authors to simulate the link-drop the merge repairs;
+    # the loser keeps "Frank Herbert".
+    survivor = repo.get_book(session, ids[0])
+    survivor.author_links.clear()
+    session.flush()
+    assert survivor.author_names == "—"
+
+    repo.merge_books(session, ids[0], ids[1:])
+    session.flush()
+
+    keep = repo.get_book(session, ids[0])
+    assert keep.author_names == "Frank Herbert"
+    assert keep.dirty is True  # repaired survivor re-syncs

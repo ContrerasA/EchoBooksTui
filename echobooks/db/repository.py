@@ -390,6 +390,23 @@ def merge_books(session: Session, survivor_id: str, loser_ids: list[str]) -> Non
         for rs in list(loser.sessions):
             rs.book_id = survivor.id  # onupdate bumps updated_at so it wins on sync
             rs.dirty = True
+        # Carry contributor links from the loser when the survivor is missing them.
+        # The deterministic survivor (min id) is an arbitrary winner — it may be the
+        # copy that lost its author/narrator links to a sync race while the loser
+        # kept them. Folding them in here means a merge never strips a book's
+        # authors. Bump updated_at so the repaired survivor wins LWW on the next sync.
+        if not survivor.author_links and loser.author_links:
+            survivor.author_links = [
+                BookAuthor(author=link.author, position=link.position)
+                for link in loser.author_links
+            ]
+            survivor.dirty = True
+        if not survivor.narrator_links and loser.narrator_links:
+            survivor.narrator_links = [
+                BookNarrator(narrator=link.narrator, position=link.position)
+                for link in loser.narrator_links
+            ]
+            survivor.dirty = True
         if loser.is_favorite and not survivor.is_favorite:
             survivor.is_favorite = True
             survivor.dirty = True
